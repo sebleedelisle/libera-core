@@ -1,12 +1,9 @@
 #pragma once
-#include "net/NetConfig.hpp"
+#include "libera/net/NetConfig.hpp"
 #include <chrono>
-#include "net/Deadline.hpp"
+#include "libera/net/Deadline.hpp"
 
 namespace libera::net {
-namespace asio = boost::asio;
-using udp = asio::ip::udp;
-using namespace std::chrono;
 
 /**
  * UdpSocket
@@ -19,26 +16,26 @@ class UdpSocket {
 public:
     explicit UdpSocket(asio::io_context& io) : sock_(io) {}
 
-    boost::system::error_code open_v4() {
-        boost::system::error_code ec;
+    libera::net::error_code open_v4() {
+        libera::net::error_code ec;
         sock_.open(udp::v4(), ec);
         return ec;
     }
 
-    boost::system::error_code bind_any(uint16_t port) {
-        boost::system::error_code ec;
+    libera::net::error_code bind_any(uint16_t port) {
+        libera::net::error_code ec;
         sock_.bind(udp::endpoint(udp::v4(), port), ec);
         return ec;
     }
 
-    boost::system::error_code enable_broadcast(bool on=true) {
-        boost::system::error_code ec;
+    libera::net::error_code enable_broadcast(bool on=true) {
+        libera::net::error_code ec;
         sock_.set_option(asio::socket_base::broadcast(on), ec);
         return ec;
     }
 
     // Send a datagram, fail if not sent within timeout.
-    boost::system::error_code send_to(const void* data, std::size_t n,
+    libera::net::error_code send_to(const void* data, std::size_t n,
                                       const udp::endpoint& ep, milliseconds timeout) {
         auto ex = sock_.get_executor();
         return with_deadline(ex, timeout,
@@ -47,7 +44,7 @@ public:
     }
 
     // Receive one datagram, with timeout. Returns ec + fills out_ep + out_n.
-    boost::system::error_code recv_from(void* data, std::size_t max,
+    libera::net::error_code recv_from(void* data, std::size_t max,
                                         udp::endpoint& out_ep, std::size_t& out_n,
                                         milliseconds timeout) {
         auto ex = sock_.get_executor();
@@ -55,7 +52,7 @@ public:
         return with_deadline(ex, timeout,
             [&](auto cb){
                 sock_.async_receive_from(asio::buffer(data, max), out_ep, 0,
-                    [&, cb](const boost::system::error_code& ec, std::size_t n){
+                    [&, cb](const libera::net::error_code& ec, std::size_t n){
                         out_n = n; cb(ec);
                     });
             },
@@ -63,7 +60,7 @@ public:
     }
 
     udp::socket& raw() { return sock_; }
-    void close() { boost::system::error_code ignore; sock_.close(ignore); }
+    void close() { libera::net::error_code ignore; sock_.close(ignore); }
 
 private:
     udp::socket sock_;

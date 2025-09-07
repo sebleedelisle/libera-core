@@ -1,9 +1,9 @@
-#include "Controller.hpp"
+#include "libera/core/LaserDeviceBase.hpp"
 #include <cassert>
 
 namespace libera::core {
 
-Controller::Controller() {
+LaserDeviceBase::LaserDeviceBase() {
     // Pre-reserve a large capacity so vectors can be reused
     // without reallocating in the real-time path.
     // 30,000 points is intentionally generous — safe for most DACs.
@@ -11,12 +11,16 @@ Controller::Controller() {
     newPoints.reserve(30000);
 }
 
-void Controller::setRequestPointsCallback(const RequestPointsCallback &callback) {
+LaserDeviceBase::~LaserDeviceBase() {
+    stop();
+}
+
+void LaserDeviceBase::setRequestPointsCallback(const RequestPointsCallback &callback) {
     // Store the callback (copied in).
     requestPointsCallback = callback;
 }
 
-bool Controller::pullOnce(const PointFillRequest &request) {
+bool LaserDeviceBase::pullOnce(const PointFillRequest &request) {
     if (!requestPointsCallback) {
         // No callback set — cannot produce points.
         return false;
@@ -40,7 +44,7 @@ bool Controller::pullOnce(const PointFillRequest &request) {
 }
 
 
-void Controller::start() {
+void LaserDeviceBase::start() {
     if (running) return; // already running
     running = true;
     worker = std::thread([this] {
@@ -48,7 +52,7 @@ void Controller::start() {
     });
 }
 
-void Controller::stop() {
+void LaserDeviceBase::stop() {
     if (running) {
         running = false;
         if (worker.joinable()) {

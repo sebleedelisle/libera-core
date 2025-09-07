@@ -47,6 +47,11 @@
         "streambuf": "cpp",
         "string_view": "cpp",
         "variant": "cpp",
-        "algorithm": "cpp"
-    }
+        "algorithm": "cpp",
+        "system_error": "cpp",
+        "thread": "cpp",
+        "iostream": "cpp"
+    }, 
+      "C_Cpp.default.cppStandard": "c++17",
+      "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
 }

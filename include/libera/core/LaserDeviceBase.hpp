@@ -47,7 +47,7 @@ using RequestPointsCallback =
  * - Requesting batches of new points via pullOnce().
  * - Accumulating generated points into an internal buffer for later use.
  */
-class Controller {
+class LaserDeviceBase {
 public:
     /**
      * @brief Construct the controller and reserve internal buffers.
@@ -55,8 +55,8 @@ public:
      * Currently reserves ~30k points for both buffers, which is more than most
      * hardware FIFOs. This avoids most reallocations in practice.
      */
-    Controller();
-
+    LaserDeviceBase();
+    ~LaserDeviceBase();
     /**
      * @brief Install or replace the callback that generates points.
      * @param callback Function object or lambda conforming to RequestPointsCallback.

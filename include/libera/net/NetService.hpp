@@ -1,9 +1,8 @@
 #pragma once
-#include "net/NetConfig.hpp"
+#include "libera/net/NetConfig.hpp"
 #include <thread>
 
 namespace libera::net {
-namespace asio = boost::asio;
 
 /**
  * NetService

@@ -1,4 +1,4 @@
-#include "Dummy/DummyController.hpp"
+#include "libera/core/Dummy/DummyController.hpp"
 #include <chrono>
 #include <iostream>
 
@@ -13,9 +13,7 @@ DummyController::~DummyController() {
 void DummyController::run() {
     using namespace std::chrono;
 
-    const auto duration = 10s;
     const auto interval = milliseconds(33); // ~30Hz
-
 
     while (running ) {
         PointFillRequest req;
