@@ -96,11 +96,15 @@ public:
         );
     }
 
-    void set_low_latency() {
+    void setLowLatency() {
         error_code ec;
         socket_.set_option(tcp::no_delay(true), ec);
         socket_.set_option(asio::socket_base::keep_alive(true), ec);
     }
+
+    bool is_open() const { return socket_.is_open(); }
+    // auto& socket() { return socket_; }
+    // const auto& socket() const { return socket_; }
 
     void close() {
         if (!socket_.is_open()) return;

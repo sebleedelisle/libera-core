@@ -44,9 +44,8 @@ public:
 
     bool connect(const libera::net::asio::ip::address& address);
     void close();                        // idempotent
-    bool is_connected() const;           // const-safe
-    std::optional<libera::net::asio::ip::address> lastAddress() const { return rememberedAddress; }
-
+    bool isConnected() const;           // const-safe
+    
 protected:
     void run() override;
 
