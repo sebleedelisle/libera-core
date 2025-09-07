@@ -1,3 +1,10 @@
+
+*.DS_Store
+
+build/
+CMakeFiles/
+CMakeCache.txt
+
 # Prerequisites
 *.d
 
