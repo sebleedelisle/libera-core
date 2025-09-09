@@ -1,6 +1,7 @@
 #pragma once
 #include "libera/net/NetConfig.hpp"
 #include <thread>
+#include <iostream>
 
 namespace libera::net {
 
@@ -20,7 +21,9 @@ public:
     : io_()
     , work_guard_(asio::make_work_guard(io_)) // keep io_context running
     , t_([this]{ io_.run(); })                // launch worker thread
-    {}
+    {
+        std::cout << "Creating NetService object"<< std::endl; 
+    }
 
     ~NetService() {
         // Tell work_guard we’re done, stop the context, and join thread
@@ -28,6 +31,12 @@ public:
         io_.stop();
         if (t_.joinable()) t_.join();
     }
+
+    NetService(const NetService&) = delete;
+    NetService& operator=(const NetService&) = delete;
+    NetService(NetService&&) = delete;
+    NetService& operator=(NetService&&) = delete;
+
 
     // Provide access to the io_context
     asio::io_context& io() { return io_; }

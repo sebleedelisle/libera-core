@@ -1,0 +1,31 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug (no sanitiser)",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SANITIZE": "none"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "Debug (Address/UB Sanitizer)",
+      "inherits": "debug",
+      "cacheVariables": { "SANITIZE": "address" }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Debug (Thread Sanitizer)",
+      "inherits": "debug",
+      "cacheVariables": { "SANITIZE": "thread" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "asan",  "configurePreset": "asan"  },
+    { "name": "tsan",  "configurePreset": "tsan"  }
+  ]
+}

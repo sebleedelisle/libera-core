@@ -11,6 +11,24 @@ project(libera-core LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# Toggle with -DSANITIZE=none|address|thread (presets above set this)
+set(SANITIZE "none" CACHE STRING "Sanitizer to use (none|address|thread)")
+set_property(CACHE SANITIZE PROPERTY STRINGS none address thread)
+
+# Apply only to Debug builds
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+  if (SANITIZE STREQUAL "address")
+    set(SAN_FLAGS "-fsanitize=address,undefined -fno-omit-frame-pointer")
+  elseif (SANITIZE STREQUAL "thread")
+    set(SAN_FLAGS "-fsanitize=thread -fno-omit-frame-pointer")
+  endif()
+
+  if (SAN_FLAGS)
+    add_compile_options(${SAN_FLAGS})
+    add_link_options(${SAN_FLAGS})
+  endif()
+endif()
+
 
 # Optional: a few sensible warnings. Comment out if you prefer quiet builds.
 if (MSVC)

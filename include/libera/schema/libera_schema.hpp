@@ -1,25 +1,24 @@
 #pragma once
 // libera_schema.hpp (C++17-only, header-only)
 // -----------------------------------------------------------------------------
-// WHAT: A tiny, declarative toolkit to describe binary packet schemas in C++,
-//       then safely decode/encode them with validation.
-// HOW:
+// Tiny declarative toolkit for binary packet schemas + safe decode/encode.
+//
+// Usage sketch:
 //   struct MyPkt { uint8_t proto; uint32_t rate; };
 //   using namespace libera::schema;
-//   const auto mySchema = makeSchema<MyPkt>(
-//     field<&MyPkt::proto>("proto", BeU8{}, NonZero{}),
-//     field<&MyPkt::rate >("rate" , BeU32{}),
-//     objectValidator([](const MyPkt& p)->expected<void,DecodeError>{
-//         if (p.proto != 1) return unexpected<DecodeError>({"proto","unsupported"});
-//         return {};
-//     })
+//   constexpr auto fields = std::make_tuple(
+//       field<&MyPkt::proto>("proto", BeU8{}, NonZero{}),
+//       field<&MyPkt::rate >("rate" , BeU32{})
 //   );
-//   auto pkt  = decode(mySchema, ByteView(bytes));
-//   auto blob = encode(mySchema, pkt.value());
+//   const auto schema = makeSchema<MyPkt>(fields, objectValidator([](const MyPkt& p)
+//       -> expected<void, DecodeError> {
+//       if (p.proto != 1) return unexpected<DecodeError>({"proto","unsupported"});
+//       return {};
+//   }));
+//   auto pkt  = decode(schema, ByteView(bytes));
+//   auto blob = encode(schema, pkt.value());
 //
-// DEP: https://github.com/TartanLlama/expected (single header: tl/expected.hpp)
-//
-// All API lives in `namespace libera::schema`.
+// Depends on: TartanLlama expected (single header):  tl/expected.hpp
 // -----------------------------------------------------------------------------
 
 #include <cstddef>    // std::byte, std::size_t
@@ -30,21 +29,20 @@
 #include <string>
 #include <type_traits>
 #include <utility>
-#include <tl/expected.hpp>   // C++17-friendly expected<T,E>
+#include <tl/expected.hpp>
+#include <sstream>
 
 namespace libera::schema {
 
 // ============================================================================
-// 1) C++17 shims / small utilities
+// Basics (C++17 shims)
 // ============================================================================
-
-// Make tl::expected look like std::expected to callers of this header.
 template<class T, class E>
 using expected = tl::expected<T, E>;
 template<class E>
 using unexpected = tl::unexpected<E>;
 
-// Minimal read-only byte view (C++17 stand-in for std::span<const std::byte>)
+// Minimal read-only byte slice (stand-in for std::span<const std::byte>)
 struct ByteView {
     const std::byte* ptr = nullptr;
     std::size_t len = 0;
@@ -52,7 +50,6 @@ struct ByteView {
     ByteView() = default;
     ByteView(const std::byte* p, std::size_t n) : ptr(p), len(n) {}
 
-    // Convenience: construct from any contiguous container
     template<class Container>
     explicit ByteView(const Container& c)
     : ptr(reinterpret_cast<const std::byte*>(c.data())), len(c.size()) {}
@@ -61,46 +58,21 @@ struct ByteView {
     const std::byte* data() const { return ptr; }
     const std::byte& operator[](std::size_t i) const { return ptr[i]; }
 
-    // Return a new view advanced by n bytes (does not mutate *this*)
     ByteView subspan(std::size_t n) const {
-        if (n > len) return {};                 // invalid -> empty view
+        if (n > len) return {};
         return ByteView(ptr + n, len - n);
     }
 };
 
-// ---- forward decl so traits can “see” ObjectValidator below ----
-template<class Fn>
-struct ObjectValidator;
-
-// trait: true iff T is exactly ObjectValidator<*>
-template<class T> struct IsObjectValidator : std::false_type {};
-template<class Fn> struct IsObjectValidator<ObjectValidator<Fn>> : std::true_type {};
-
-// helper: extract the *last* type from a parameter pack
-template<class... Ts> struct LastType;                  // primary (variadic)
-template<class T> struct LastType<T> { using type = T; };
-template<class T, class... Ts>
-struct LastType<T, Ts...> { using type = typename LastType<Ts...>::type; };
-
-// ============================================================================
-// 2) Error type
-// ============================================================================
+// Error payload used by expected
 struct DecodeError {
-    std::string where; // field/step name
-    std::string what;  // human message
+    std::string where;
+    std::string what;
 };
 
 // ============================================================================
-// 3) Codecs (byte <-> value)
+// Codecs (value <-> bytes) : Be == big-endian fixed width + fixed ASCII
 // ============================================================================
-// A "codec" has:
-//   expected<Value,DecodeError> read(ByteView& s, const char* where) const;
-//   void write(const Value& v, std::vector<std::byte>& out) const;
-//
-// Rules:
-//  - read MUST bounds-check and then advance s (s = s.subspan(N))
-//  - write MUST append N bytes to out
-
 struct BeU8 {
     expected<uint8_t, DecodeError>
     read(ByteView& s, const char* where) const {
@@ -148,8 +120,7 @@ struct BeU32 {
     }
 };
 
-// Fixed-length ASCII<N>: printable ASCII or zero padding.
-// Maps to std::array<char,N>. (No trimming or null-termination is applied.)
+// Fixed-length ASCII (printable or zero padding). Maps to std::array<char,N>.
 template<std::size_t N>
 struct FixedAscii {
     using Arr = std::array<char, N>;
@@ -159,8 +130,8 @@ struct FixedAscii {
         if (s.size() < N) return unexpected<DecodeError>({where, "not enough bytes"});
         Arr out{};
         for (std::size_t i = 0; i < N; ++i) {
-            const unsigned char u = static_cast<unsigned char>(s[i]);
-            const char c = static_cast<char>(u);
+            unsigned char u = static_cast<unsigned char>(s[i]);
+            char c = static_cast<char>(u);
             if (c != 0 && (c < 0x20 || c > 0x7E))
                 return unexpected<DecodeError>({where, "non-ASCII char"});
             out[i] = c;
@@ -171,17 +142,14 @@ struct FixedAscii {
 
     template<class ArrLike>
     void write(const ArrLike& a, std::vector<std::byte>& out) const {
-        static_assert(std::tuple_size<ArrLike>::value == N, "FixedAscii<N>: size mismatch");
+        static_assert(std::tuple_size<ArrLike>::value == N, "FixedAscii size mismatch");
         for (char c : a) out.push_back(std::byte(static_cast<unsigned char>(c)));
     }
 };
 
 // ============================================================================
-// 4) Validators (field-level)
+// Validators
 // ============================================================================
-// A validator is any callable:
-//   expected<void,DecodeError> operator()(const char* where, const T& v) const;
-
 struct NonZero {
     template<class U>
     expected<void, DecodeError> operator()(const char* where, const U& v) const {
@@ -202,28 +170,32 @@ struct NotEmptyAscii {
     }
 };
 
-// Validate raw enum underlying value is in [Min, Max] BEFORE casting.
 template<class Enum, uint8_t Min, uint8_t Max>
 struct EnumRange {
-    expected<void, DecodeError>
-    operator()(const char* where, uint8_t raw) const {
-        if (raw < Min || raw > Max) return unexpected<DecodeError>({where, "unknown enum value"});
+    expected<void, DecodeError> operator()(const char* where, uint8_t raw) const {
+        if (raw < Min || raw > Max) {
+            std::ostringstream msg;
+            msg << "unknown enum value " << static_cast<int>(raw)
+                << " (expected " << static_cast<int>(Min)
+                << "-" << static_cast<int>(Max) << ")";
+            return unexpected<DecodeError>({where, msg.str()});
+        }
         return {};
     }
 };
 
 // ============================================================================
-// 5) Field descriptor
+// Field descriptor + helper
 // ============================================================================
-// Binds: pointer-to-member, name, codec, and zero-or-more validators.
 template<auto MemberPtr, class Codec, class... Validators>
 struct Field {
+      // Expose the pointer-to-member so instances can use it.
+    static constexpr auto memberPtr = MemberPtr;
     const char* name;
     Codec codec;
     std::tuple<Validators...> validators;
 };
 
-// Helper for nicer callsite syntax
 template<auto MemberPtr, class Codec, class... Validators>
 Field<MemberPtr, Codec, Validators...>
 field(const char* name, Codec c, Validators... vs) {
@@ -231,7 +203,7 @@ field(const char* name, Codec c, Validators... vs) {
 }
 
 // ============================================================================
-// 6) Object-level validator (cross-field rules)
+// Object-level validator
 // ============================================================================
 template<class Fn>
 struct ObjectValidator { Fn fn; };
@@ -240,7 +212,7 @@ template<class Fn>
 ObjectValidator<Fn> objectValidator(Fn fn) { return ObjectValidator<Fn>{fn}; }
 
 // ============================================================================
-// 7) Schema + makeSchema (with overload-ambiguity fix)
+// Schema + tuple-only makeSchema (no overload ambiguity)
 // ============================================================================
 template<class T, class FieldsTuple, class ObjValidator>
 struct Schema {
@@ -248,28 +220,7 @@ struct Schema {
     ObjValidator objValidator;
 };
 
-// (A) No object validator: enabled only if the *last* arg is NOT ObjectValidator
-template<class T, class... FieldDescs,
-         class Last = typename LastType<FieldDescs...>::type,
-         class = typename std::enable_if<!IsObjectValidator<Last>::value>::type>
-Schema<T, std::tuple<FieldDescs...>, struct NoObjVal>
-makeSchema(FieldDescs... fds) {
-    struct NoObjVal {
-        expected<void, DecodeError> operator()(const T&) const { return {}; }
-    };
-    return { std::tuple<FieldDescs...>{fds...}, NoObjVal{} };
-}
-
-// (B) With object validator (last arg is explicitly an ObjectValidator)
-template<class T, class... FieldDescs, class Fn>
-Schema<T, std::tuple<FieldDescs...>, ObjectValidator<Fn>>
-makeSchema(FieldDescs... fds, ObjectValidator<Fn> ov) {
-    return { std::tuple<FieldDescs...>{fds...}, ov };
-}
-
-// --- NEW: tuple-based overloads (rock-solid deduction on all compilers) ---
-
-// (A) tuple of fields, no object validator
+// tuple of fields, no object validator
 template<class T, class... FieldDescs>
 Schema<T, std::tuple<FieldDescs...>, struct NoObjVal>
 makeSchema(std::tuple<FieldDescs...> fds) {
@@ -279,50 +230,49 @@ makeSchema(std::tuple<FieldDescs...> fds) {
     return { std::move(fds), NoObjVal{} };
 }
 
-// (B) tuple of fields + object validator
+// tuple of fields + object validator
 template<class T, class... FieldDescs, class Fn>
 Schema<T, std::tuple<FieldDescs...>, ObjectValidator<Fn>>
 makeSchema(std::tuple<FieldDescs...> fds, ObjectValidator<Fn> ov) {
     return { std::move(fds), ov };
 }
-
-
-
 // ============================================================================
-// 8) Internal: run all validators attached to a field
+// Internals: run all validators for a field
 // ============================================================================
 namespace detail {
+
+// Only instantiate underlying_type when T is an enum.
+template<class T, bool IsEnum>
+struct NormalizeImpl { using type = T; };
+
+template<class T>
+struct NormalizeImpl<T, true> { using type = typename std::underlying_type<T>::type; };
+
+template<class T>
+using normalize_t = typename NormalizeImpl<T, std::is_enum<T>::value>::type;
+
 template<class FieldDesc, class V>
 expected<void, DecodeError> runFieldValidators(const FieldDesc& fd, const V& v) {
+    using NormT = normalize_t<V>;
+    const NormT vv = static_cast<NormT>(v);
+
     expected<void, DecodeError> ok{};
     std::apply([&](auto const&... val){
         ( ( [&](){
-            auto r = val(fd.name, v);
+            auto r = val(fd.name, vv);
             if (!r) ok = unexpected<DecodeError>(r.error());
-        }() ), ... ); // fold across validators
+        }() ), ... );
     }, fd.validators);
-    return ok; // {} if all passed, otherwise unexpected(error)
+    return ok;
 }
+
 } // namespace detail
 
-// ============================================================================
-// 9) decode / encode
-// ============================================================================
-// decode(schema, bytes):
-//   - makes local ByteView s
-//   - for each field in order:
-//       * raw = fd.codec.read(s, fd.name)
-//       * detail::runFieldValidators(fd, raw)
-//       * obj.*Member = raw (cast to enum if needed)
-//   - run object validator; return expected<T,DecodeError>
-//
-// encode(schema, obj):
-//   - run object validator first
-//   - for each field in order:
-//       * const auto& v = obj.*Member
-//       * run validators on v
-//       * fd.codec.write(v, out)
 
+
+// ============================================================================
+// decode / encode
+// ============================================================================
 template<class T, class FieldsTuple, class ObjValidatorT>
 expected<T, DecodeError>
 decode(const Schema<T, FieldsTuple, ObjValidatorT>& sch, ByteView bytes) {
@@ -336,23 +286,20 @@ decode(const Schema<T, FieldsTuple, ObjValidatorT>& sch, ByteView bytes) {
         ( ( [&](){
             if (failed) return;
 
-            using MemberT =
-                typename std::remove_reference<decltype(obj.*(fd.MemberPtr))>::type;
+            using MemberT = typename std::remove_reference<decltype(obj.*(fd.memberPtr))>::type;
 
-            // 1) read
             auto raw = fd.codec.read(s, fd.name);
             if (!raw) { failed = true; err = raw.error(); return; }
 
-            // 2) validate raw
             if (auto ok = detail::runFieldValidators(fd, *raw); !ok) {
                 failed = true; err = ok.error(); return;
             }
 
-            // 3) assign (cast if enum)
-            if (std::is_enum<MemberT>::value) {
-                obj.*(fd.MemberPtr) = static_cast<MemberT>(*raw);
+            // assign (cast if enum)
+            if constexpr (std::is_enum_v<MemberT>) {
+                obj.*(fd.memberPtr) = static_cast<MemberT>(*raw);
             } else {
-                obj.*(fd.MemberPtr) = *raw;
+                obj.*(fd.memberPtr) = *raw;
             }
         }() ), ... );
     }, sch.fields);
@@ -368,7 +315,6 @@ decode(const Schema<T, FieldsTuple, ObjValidatorT>& sch, ByteView bytes) {
 template<class T, class FieldsTuple, class ObjValidatorT>
 expected<std::vector<std::byte>, DecodeError>
 encode(const Schema<T, FieldsTuple, ObjValidatorT>& sch, const T& obj) {
-    // Never emit illegal packets
     if (auto ok = sch.objValidator.fn(obj); !ok)
         return unexpected<DecodeError>(ok.error());
 
@@ -380,14 +326,22 @@ encode(const Schema<T, FieldsTuple, ObjValidatorT>& sch, const T& obj) {
         ( ( [&](){
             if (failed) return;
 
-            const auto& v = obj.*(fd.MemberPtr);
+           // encode loop, inside the apply:
+            const auto& v = obj.*(fd.memberPtr);
 
             // validate before writing
             if (auto ok = detail::runFieldValidators(fd, v); !ok) {
                 failed = true; err = ok.error(); return;
             }
 
-            fd.codec.write(v, out);
+            // write, with enum→underlying conversion if needed
+            if constexpr (std::is_enum_v<std::decay_t<decltype(v)>>) {
+                using U = typename std::underlying_type<std::decay_t<decltype(v)>>::type;
+                fd.codec.write(static_cast<U>(v), out);
+            } else {
+                fd.codec.write(v, out);
+            }
+
         }() ), ... );
     }, sch.fields);
 

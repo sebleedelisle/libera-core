@@ -1,12 +1,14 @@
 // EtherDreamDevice.cpp
-#include "libera/core/etherdream/EtherDreamDevice.hpp"
+#include "libera/etherdream/EtherDreamDevice.hpp"
 #include <array>
 #include <chrono>
 #include <iostream>
 #include <thread>
+#include <iomanip>  // for std::setw, std::setfill, std::hex, std::dec
+
 using namespace std::chrono_literals;
 
-namespace libera::core::etherdream {
+namespace libera::etherdream {
 
 EtherDreamDevice::EtherDreamDevice(libera::net::asio::io_context& ioContext)
 : tcpClient(ioContext) {}
@@ -59,13 +61,27 @@ void EtherDreamDevice::run() {
     constexpr std::size_t minPointsPerTick = 1000;
     constexpr std::size_t maxBufferedPoints = 30000; // cap to avoid runaway
 
+    std::cout << "Sending ping" << std::endl;
+    uint8_t cmd = '?';
+    libera::net::error_code ec = tcpClient.write_all(&cmd, 1, std::chrono::milliseconds(100));
+    if(ec) { 
+        std::cerr << "Error sending ping " << ec.message() << std::endl;
+    }
+  
     while (running.load(std::memory_order_relaxed)) {
 
+        //tcpClient.read_exact(
         
-        
+        if (auto st = read_status(100ms); st) {
+                // use st->buffer_fullness, st->playback_state, etc.
+            std::cout << "Received response " << (int)(st->playbackState) << std::endl; 
+        } else {
+            // decode or IO error - up to you whether to close/retry/log
+            std::cerr << st.error().message() << "\n";
+        }
 
 
-        PointFillRequest req;
+        core::PointFillRequest req;
         req.minimumPointsRequired = minPointsPerTick;
         req.estimatedFirstPointRenderTime = std::chrono::steady_clock::now() + tick;
 
@@ -90,5 +106,53 @@ void EtherDreamDevice::run() {
         std::this_thread::sleep_for(tick);
     }
 }
+tl::expected<schema::DacStatus, std::error_code>
+EtherDreamDevice::read_status(std::chrono::milliseconds timeout)
+{
+    std::array<std::byte, 22> raw{};
 
-} // namespace libera::core::etherdream
+    if (!tcpClient.is_open()) {
+        return tl::unexpected(make_error_code(std::errc::not_connected));
+    }
+
+    libera::net::error_code ec = tcpClient.read_exact(raw.data(), raw.size(), timeout);
+    if (ec) {
+        return tl::unexpected(std::error_code(ec.value(), ec.category()));
+    }
+
+    // Debug dump
+    std::cout << "read 22 bytes: ";
+    for (auto b : raw) {
+        std::cout << std::hex << std::setw(2) << std::setfill('0')
+                  << static_cast<int>(b) << " ";
+    }
+    std::cout << std::dec << std::endl;
+
+    // First two bytes = response + command
+    uint8_t response = static_cast<uint8_t>(raw[0]);
+    uint8_t command  = static_cast<uint8_t>(raw[1]);
+
+    if (response != 'a') {
+        std::cerr << "[EtherDreamDevice] non-ACK response: "
+                  << static_cast<char>(response)
+                  << " to command " << static_cast<char>(command) << "\n";
+        return tl::unexpected(make_error_code(std::errc::protocol_error));
+    }
+
+    // Remaining 20 bytes = dac_status
+    auto decoded = schema::decodeStatus(
+        libera::schema::ByteView{raw.data() + 2, 20});
+    if (!decoded) {
+        const auto& e = decoded.error();
+        std::cerr << "[EtherDreamDevice] decodeStatus failed at '"
+                  << e.where << "': " << e.what << "\n";
+        return tl::unexpected(make_error_code(std::errc::protocol_error));
+    }
+
+    return *decoded;
+}
+
+
+
+
+} // namespace libera::etherdream

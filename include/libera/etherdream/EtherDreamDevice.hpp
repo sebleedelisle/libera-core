@@ -27,9 +27,11 @@
 #include "libera/core/LaserDeviceBase.hpp"
 #include "libera/net/NetConfig.hpp"
 #include "libera/net/TcpClient.hpp"
+#include "libera/etherdream/etherdream_schema.hpp"
 #include <optional>
+#include "tl/expected.hpp"
 
-namespace libera::core::etherdream {
+namespace libera::etherdream {
 
 class EtherDreamDevice : public libera::core::LaserDeviceBase {
 public:
@@ -45,13 +47,18 @@ public:
     bool connect(const libera::net::asio::ip::address& address);
     void close();                        // idempotent
     bool isConnected() const;           // const-safe
+
     
 protected:
     void run() override;
+
+    tl::expected<schema::DacStatus, std::error_code>
+        read_status(std::chrono::milliseconds timeout);
+
 
 private:
     libera::net::TcpClient tcpClient;
     std::optional<libera::net::asio::ip::address> rememberedAddress{};
 };
 
-} // namespace libera::core::etherdream
+} // namespace libera::etherdream

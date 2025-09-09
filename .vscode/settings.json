@@ -50,7 +50,10 @@
         "algorithm": "cpp",
         "system_error": "cpp",
         "thread": "cpp",
-        "iostream": "cpp"
+        "iostream": "cpp",
+        "__config": "cpp",
+        "exception": "cpp",
+        "expected": "cpp"
     }, 
       "C_Cpp.default.cppStandard": "c++17",
       "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
