@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <memory>
 
 /**
  * with_deadline
@@ -25,23 +26,26 @@ error_code with_deadline(
     StartAsync start_async,
     Cancel cancel)
 {
+    struct State {
+        std::mutex m;
+        std::condition_variable cv;
+        bool done = false;
+        error_code ec = asio::error::would_block;
+    };
+
+    auto st = std::make_shared<State>();
     asio::steady_timer timer(ex);
 
-    std::mutex m;
-    std::condition_variable cv;
-    bool done = false;
-    error_code ec = asio::error::would_block;
-
     // Completion of the user async op
-    auto op_handler = [&](const error_code& op_ec, auto&&... /*ignored*/) {
+    auto op_handler = [st, &timer](const error_code& op_ec, auto&&... /*ignored*/) {
         {
-            std::lock_guard<std::mutex> lk(m);
-            if (done) return;           // another path already won
-            ec = op_ec;
-            done = true;
+            std::lock_guard<std::mutex> lk(st->m);
+            if (st->done) return;           // another path already won
+            st->ec = op_ec;
+            st->done = true;
         }
-        cv.notify_one();                // wake waiter first...
-        timer.cancel();                 // ...then cancel timer (its handler must be benign)
+        st->cv.notify_one();                // wake waiter first...
+        timer.cancel();                     // ...then cancel timer (handler must be benign)
     };
 
     // Kick off the async operation (it must call our op_handler)
@@ -49,26 +53,26 @@ error_code with_deadline(
 
     // Arm the deadline
     timer.expires_after(timeout);
-    timer.async_wait([&](const error_code& tec){
+    timer.async_wait([st, cancel](const error_code& tec){
         if (tec == asio::error::operation_aborted) {
-            // Cancelled because op finished — DO NOT touch m/cv/done here.
+            // Cancelled because op finished — do nothing.
             return;
         }
         // Timer really expired first → cancel the op and signal completion
         cancel();
         {
-            std::lock_guard<std::mutex> lk(m);
-            if (done) return;           // op raced and already finished
-            ec = asio::error::operation_aborted;
-            done = true;
+            std::lock_guard<std::mutex> lk(st->m);
+            if (st->done) return;           // op raced and already finished
+            st->ec = asio::error::operation_aborted;
+            st->done = true;
         }
-        cv.notify_one();
+        st->cv.notify_one();
     });
 
     // Wait until either branch completes
-    std::unique_lock<std::mutex> lk(m);
-    cv.wait(lk, [&]{ return done; });
-    return ec;
+    std::unique_lock<std::mutex> lk(st->m);
+    st->cv.wait(lk, [&]{ return st->done; });
+    return st->ec;
 }
 
 }

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <thread>
 #include <iomanip>  // for std::setw, std::setfill, std::hex, std::dec
+#include <cstddef>  // for std::byte, std::to_integer
 
 using namespace std::chrono_literals;
 
@@ -18,7 +19,8 @@ EtherDreamDevice::~EtherDreamDevice() {
     close();  // ensure socket is closed
 }
 
-bool EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
+tl::expected<void, std::error_code>
+EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
 
     constexpr unsigned short port = 7765;
     libera::net::tcp::endpoint endpoint(address, port);
@@ -27,7 +29,7 @@ bool EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
     if (ec) {
         std::cerr << "[EtherDreamDevice] connect failed: " << ec.message()
                   << " (to " << address.to_string() << ":" << port << ")\n";
-        return false;
+        return tl::unexpected(std::error_code(ec.value(), ec.category()));
     }
 
     tcpClient.setLowLatency();
@@ -37,7 +39,7 @@ bool EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
     std::cout << "[EtherDreamDevice] connected to "
               << address.to_string() << ":" << port << "\n";
 
-    return true;
+    return {};
 }
 
 void EtherDreamDevice::close() {
@@ -68,16 +70,15 @@ void EtherDreamDevice::run() {
         std::cerr << "Error sending ping " << ec.message() << std::endl;
     }
   
-    while (running.load(std::memory_order_relaxed)) {
-
-        //tcpClient.read_exact(
-        
-        if (auto st = read_status(100ms); st) {
+    while (running) {
+        if (isConnected()) {
+            if (auto st = read_status(100ms); st) {
                 // use st->buffer_fullness, st->playback_state, etc.
-            std::cout << "Received response " << (int)(st->playbackState) << std::endl; 
-        } else {
-            // decode or IO error - up to you whether to close/retry/log
-            std::cerr << st.error().message() << "\n";
+                std::cout << "Received response " << (int)(st->playbackState) << std::endl;
+            } else {
+                // decode or IO error - up to you whether to close/retry/log
+                std::cerr << st.error().message() << "\n";
+            }
         }
 
 
@@ -124,7 +125,7 @@ EtherDreamDevice::read_status(std::chrono::milliseconds timeout)
     std::cout << "read 22 bytes: ";
     for (auto b : raw) {
         std::cout << std::hex << std::setw(2) << std::setfill('0')
-                  << static_cast<int>(b) << " ";
+                  << std::to_integer<int>(b) << " ";
     }
     std::cout << std::dec << std::endl;
 

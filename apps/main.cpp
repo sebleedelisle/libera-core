@@ -16,7 +16,7 @@ int main() {
     // 3) Install your point-generation callback.
     etherdream.setRequestPointsCallback(
         [](const core::PointFillRequest& req, std::vector<core::LaserPoint>& out) {
-            out.reserve(out.size() + req.minimumPointsRequired);
+            // Respect the RT contract: do not reserve/resize here.
             for (size_t i = 0; i < req.minimumPointsRequired; ++i) {
                 // Dummy point: zero coords, full RGB+intensity, flags=0
                 out.push_back(core::LaserPoint{0, 0, 1, 1, 1, 1, 0});
@@ -32,8 +32,8 @@ int main() {
     auto ip = libera::net::asio::ip::make_address("192.168.1.76", ec);
     if (ec) {
         std::cerr << "Invalid IP: " << ec.message() << "\n";
-    } else if (!etherdream.connect(ip)) {
-        std::cerr << "Connect failed\n";
+    } else if (auto r = etherdream.connect(ip); !r) {
+        std::cerr << "Connect failed: " << r.error().message() << "\n";
     } else { 
                 // 5) Start the device worker thread (calls EtherDreamDevice::run()).
         std::cout << "Starting dummy run..." << std::endl;

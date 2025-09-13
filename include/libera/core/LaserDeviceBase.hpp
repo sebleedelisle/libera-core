@@ -56,7 +56,7 @@ public:
      * hardware FIFOs. This avoids most reallocations in practice.
      */
     LaserDeviceBase();
-    ~LaserDeviceBase();
+    virtual ~LaserDeviceBase();
     /**
      * @brief Install or replace the callback that generates points.
      * @param callback Function object or lambda conforming to RequestPointsCallback.

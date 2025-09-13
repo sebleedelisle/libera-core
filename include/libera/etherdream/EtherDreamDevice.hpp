@@ -44,7 +44,8 @@ public:
     EtherDreamDevice(EtherDreamDevice&&) = delete;
     EtherDreamDevice& operator=(EtherDreamDevice&&) = delete;
 
-    bool connect(const libera::net::asio::ip::address& address);
+    tl::expected<void, std::error_code>
+    connect(const libera::net::asio::ip::address& address);
     void close();                        // idempotent
     bool isConnected() const;           // const-safe
 

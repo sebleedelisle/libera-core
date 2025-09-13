@@ -15,7 +15,7 @@ void DummyController::run() {
 
     const auto interval = milliseconds(33); // ~30Hz
 
-    while (running ) {
+    while (running) {
         PointFillRequest req;
         req.minimumPointsRequired = 1000;
         req.estimatedFirstPointRenderTime = steady_clock::now();

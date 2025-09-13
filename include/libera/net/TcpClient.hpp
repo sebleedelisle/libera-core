@@ -106,9 +106,17 @@ public:
     // auto& socket() { return socket_; }
     // const auto& socket() const { return socket_; }
 
+    // Best-effort cancellation of pending ops on the socket.
+    void cancel() {
+        error_code ec;
+        socket_.cancel(ec);
+    }
+
     void close() {
         if (!socket_.is_open()) return;
         error_code ec;
+        // Proactively cancel any outstanding operations first
+        socket_.cancel(ec);
         socket_.shutdown(tcp::socket::shutdown_both, ec);
         socket_.close(ec);
     }
