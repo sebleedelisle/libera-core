@@ -15,6 +15,9 @@ void DummyController::run() {
 
     const auto interval = milliseconds(33); // ~30Hz
 
+    // A minimal example loop that exercises the callback and buffer flow.
+    // Real controllers (e.g. EtherDream) usually poll device status and send
+    // points as well.
     while (running) {
         PointFillRequest req;
         req.minimumPointsRequired = 1000;

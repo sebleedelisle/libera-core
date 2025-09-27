@@ -8,12 +8,26 @@ namespace libera::net {
 /**
  * NetService
  *
- * - Owns a boost::asio::io_context (the central event loop for network ops).
- * - Keeps it alive with a work_guard (so it doesn’t exit when idle).
- * - Runs it on a background thread.
+ * What it is:
+ * - A tiny RAII wrapper around `asio::io_context` that starts a dedicated
+ *   background thread to drive all asynchronous I/O and timers.
  *
- * Typically you create ONE of these in your application
- * and pass it by reference to all your DAC/network classes.
+ * Why this pattern:
+ * - In plain openFrameworks you often do blocking I/O on the main thread.
+ *   Here we lean into Asio's async model: we run a single I/O thread and
+ *   post all socket/timer work to it. This keeps the app responsive and
+ *   avoids tricky multi-thread access to sockets.
+ *
+ * Key pieces:
+ * - `asio::io_context` is the event loop for all async operations.
+ * - `executor_work_guard` prevents the loop from exiting when idle.
+ * - A background `std::thread` calls `io_.run()` until destruction.
+ *
+ * Lifetime and shutdown:
+ * - Destroy network-using objects (controllers, sockets) before NetService so
+ *   their async handlers are cancelled/finished while the io_context still runs.
+ * - In the destructor we reset the work guard, call `stop()`, and join the
+ *   thread—this is the orderly shutdown sequence recommended by Asio.
  */
 class NetService {
 public:
@@ -40,6 +54,8 @@ public:
 
     // Provide access to the io_context
     asio::io_context& io() { return io_; }
+    // If you need an executor (to bind timers/sockets) use io().get_executor().
+    // We keep it simple here and pass around references to io_context directly.
 
 private:
     asio::io_context io_;

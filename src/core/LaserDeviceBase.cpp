@@ -38,6 +38,8 @@ bool LaserDeviceBase::pullOnce(const PointFillRequest &request) {
            "Callback did not provide the minimum required number of points.");
 
     // Append the newly generated batch to the main buffer.
+    // Note: we intentionally keep `newPoints` separate to easily inspect how
+    // many were produced in a single `pullOnce` call and to avoid allocations.
     pointsToSend.insert(pointsToSend.end(), newPoints.begin(), newPoints.end());
 
     return true;

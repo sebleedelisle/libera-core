@@ -8,9 +8,12 @@ namespace libera::net {
 /**
  * UdpSocket
  *
- * - Simplifies opening/binding/sending/receiving with UDP.
- * - Provides timeout-capable send_to / recv_from.
- * - Useful for discovery protocols (broadcast/multicast).
+ * Small helper for UDP use-cases like device discovery or broadcast.
+ *
+ * Notes for openFrameworks users:
+ * - UDP in Asio is also async; here we provide `send_to` / `recv_from` that use
+ *   the same `with_deadline` pattern as TCP to provide timeouts.
+ * - Enable broadcast on macOS/Linux by setting the socket option when needed.
  */
 class UdpSocket {
 public:

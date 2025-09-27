@@ -7,7 +7,7 @@
 #include <iomanip>  // for std::setw, std::setfill, std::hex, std::dec
 #include <cstddef>  // for std::byte, std::to_integer
 
-using namespace std::chrono_literals;
+using namespace std::chrono_literals; // enable 100ms / 1s literals
 
 namespace libera::etherdream {
 
@@ -15,8 +15,11 @@ EtherDreamDevice::EtherDreamDevice(libera::net::asio::io_context& ioContext)
 : tcpClient(ioContext) {}
 
 EtherDreamDevice::~EtherDreamDevice() {
-    stop();   // join worker
-    close();  // ensure socket is closed
+    // Clean shutdown order:
+    // 1) stop worker thread (exits run loop)
+    // 2) close TCP (cancels outstanding socket ops)
+    stop();
+    close();
 }
 
 tl::expected<void, std::error_code>
@@ -32,7 +35,7 @@ EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
         return tl::unexpected(std::error_code(ec.value(), ec.category()));
     }
 
-    tcpClient.setLowLatency();
+    tcpClient.setLowLatency(); // low jitter for realtime-ish streams
 
     rememberedAddress = address;
 
@@ -63,6 +66,8 @@ void EtherDreamDevice::run() {
     constexpr std::size_t minPointsPerTick = 1000;
     constexpr std::size_t maxBufferedPoints = 30000; // cap to avoid runaway
 
+    // Small wire-up test: the EtherDream protocol responds to '?' with
+    // an ACK ('a') plus a 20-byte status. This helps verify connectivity.
     std::cout << "Sending ping" << std::endl;
     uint8_t cmd = '?';
     libera::net::error_code ec = tcpClient.write_all(&cmd, 1, std::chrono::milliseconds(100));
@@ -86,7 +91,7 @@ void EtherDreamDevice::run() {
         req.minimumPointsRequired = minPointsPerTick;
         req.estimatedFirstPointRenderTime = std::chrono::steady_clock::now() + tick;
 
-        const bool gotPoints = pullOnce(req);
+        const bool gotPoints = pullOnce(req); // fills `newPoints`, appends to `pointsToSend`
 
         if (gotPoints) {
             std::cout << "Pulled " << newPoints.size()

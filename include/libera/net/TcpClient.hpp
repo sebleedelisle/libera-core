@@ -1,17 +1,22 @@
 
 // 3) libera::net::TcpClient
-// What: a very thin wrapper around a TCP socket that adds timeouts.
+// A very thin wrapper around a TCP socket that adds per-operation timeouts
+// and ensures serialized access.
+//
 // Key methods:
-// connect(endpoints, timeout) → connect with timeout
-// read_exact(buf, n, timeout) → read exactly N bytes with timeout
-// write_all(buf, n, timeout) → write N bytes with timeout
-// set_low_latency() → TCP_NODELAY + keepalive
-// close() → shutdown + close safely
-// Inside:
-// owns tcp::socket socket_
-// owns an asio::strand executor to serialize socket ops
-// each operation calls with_deadline(...) under the hood
-// Think of it like: the same socket you’d write with raw Asio, but with “per-call timeout” sugar.
+// - connect(endpoints, timeout) → connect with timeout (tries a sequence)
+// - read_exact(buf, n, timeout) → read exactly N bytes with timeout
+// - write_all(buf, n, timeout) → write N bytes with timeout
+// - setLowLatency() → TCP_NODELAY + keepalive
+// - close() → cancel + shutdown + close safely
+//
+// Asio details you might not use in openFrameworks:
+// - We construct the socket with a `strand` executor. A strand guarantees that
+//   handlers posted through it do not run concurrently. This effectively
+//   serializes socket operations without manual mutexes.
+// - Each I/O function uses `with_deadline(...)`: we start the async op and a
+//   timer; cancel whichever loses. We then wait synchronously for completion
+//   (your io_context must be running on some thread).
 
 #pragma once
 #include "libera/net/NetConfig.hpp"
@@ -42,6 +47,8 @@ public:
     tcp::socket& socket() { return socket_; }
 
     // Overload 1: connect from a range/container of *endpoints* (e.g., std::array<tcp::endpoint, N>)
+    // We re-construct the socket with the strand each attempt to ensure a fresh
+    // state (avoids leftover pending ops from prior attempts).
     template <typename Endpoints>
     error_code connect(const Endpoints& endpoints, milliseconds timeout) {
         error_code last = asio::error::host_not_found;
@@ -59,6 +66,7 @@ public:
     }
 
     // Overload 2: connect from resolver results (entries have .endpoint())
+    // SFINAE ensures we pick this when Results::value_type has endpoint().
     template <typename Results>
     error_code connect(Results results, milliseconds timeout,
                        // SFINAE: prefer this when value_type has endpoint()
@@ -107,6 +115,8 @@ public:
     // const auto& socket() const { return socket_; }
 
     // Best-effort cancellation of pending ops on the socket.
+    // Useful during shutdown to nudge operations to complete now rather than
+    // waiting for timeouts.
     void cancel() {
         error_code ec;
         socket_.cancel(ec);
@@ -115,7 +125,7 @@ public:
     void close() {
         if (!socket_.is_open()) return;
         error_code ec;
-        // Proactively cancel any outstanding operations first
+        // Proactively cancel any outstanding operations first (pattern: cancel → shutdown → close)
         socket_.cancel(ec);
         socket_.shutdown(tcp::socket::shutdown_both, ec);
         socket_.close(ec);

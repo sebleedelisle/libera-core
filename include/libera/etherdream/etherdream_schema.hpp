@@ -1,5 +1,14 @@
 #pragma once
 // Ether Dream status (20-byte) schema using libera::schema (C++17)
+//
+// Why a schema?
+// - Instead of hand-parsing bytes, we describe the wire layout as a set of
+//   typed fields. The small `libera::schema` helpers handle endian reads/writes
+//   and range checks, returning rich decode errors.
+//
+// Practical upshot:
+// - `decodeStatus` and `encodeStatus` provide safe conversions between
+//   structured C++ types and the 20-byte EtherDream status block.
 
 #include <cstdint>
 #include <vector>
@@ -42,6 +51,7 @@ using PB_Range  = lsch::EnumRange<PlaybackState   , 0, 3>;
 using SRC_Range = lsch::EnumRange<Source          , 0, 2>;
 
 // --- Cross-field rules ---
+// Demonstrates how to validate combinations of fields beyond simple enums.
 inline const auto statusRules = lsch::objectValidator([](const DacStatus& s)
     -> lsch::expected<void, lsch::DecodeError>
 {
@@ -53,6 +63,8 @@ inline const auto statusRules = lsch::objectValidator([](const DacStatus& s)
 });
 
 // --- Fields (order must match wire) ---
+// The tuple defines exact on-wire order and types. Each field adapter is
+// responsible for endian conversion (BeU16/BeU32 ...).
 inline const auto dacStatusFields = std::make_tuple(
     lsch::field<&DacStatus::protocol        >("protocol"       , lsch::BeU8{} ),
     lsch::field<&DacStatus::lightEngineState>("lightEngineState", lsch::BeU8{} , LE_Range{}),

@@ -9,13 +9,26 @@
 /**
  * with_deadline
  *
- * Starts your async op and a timer on the same executor.
- * Whichever finishes first wins:
- *  - op completes first: cancel timer, return the op's error_code
- *  - timer fires first : cancel op, return operation_aborted
+ * Pattern:
+ * - Start an async operation and an `asio::steady_timer` on the same executor.
+ * - Whichever completes first cancels the other and signals a condition
+ *   variable so this call can return a result synchronously with a timeout.
  *
- * IMPORTANT: Your asio::io_context must be running on some thread while
- * this function waits (e.g., run by your app / NetService).
+ * Why it’s useful:
+ * - In openFrameworks you might reach for blocking calls with timeouts; with
+ *   Asio, a common pattern is: async + timer + cancel. This utility wraps that
+ *   into a concise helper that returns a `std::error_code`.
+ *
+ * Safety notes (subtle C++/Asio details):
+ * - The completion handlers capture a `shared_ptr<State>` so they never access
+ *   destroyed mutex/condition_variable even if they run after this function
+ *   returns. This avoids a common use-after-free race in naive implementations.
+ * - `cancel()` must cancel the same socket/timer that started the operation; we
+ *   pass it in from the caller so it can call `socket.cancel()` or similar.
+ *
+ * Requirements:
+ * - Your `asio::io_context` must be running (e.g., via NetService) while we
+ *   block waiting. If it is not, this function would wait forever.
  */
 namespace libera::net {
 

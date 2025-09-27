@@ -8,8 +8,10 @@ using tcp = asio::ip::tcp;
 /**
  * resolve
  *
- * - Performs DNS resolution (host + service string -> list of endpoints).
- * - Returns netconfig::error_code if it fails.
+ * Simple synchronous DNS lookup helper. Given `host` and `service` (e.g.
+ * "example.com", "http" or "7765") it returns a list of endpoints. Use this
+ * if you want to connect by name rather than raw IPs. It is used with the
+ * TCP client connect overload that accepts resolver results.
  */
 inline libera::net::error_code resolve(
     asio::io_context& io,

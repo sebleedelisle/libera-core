@@ -27,12 +27,14 @@ struct PointFillRequest {
  * @brief Callback contract for point generation.
  *
  * The callback must:
- * - Append new points to @p outputBuffer using push_back or emplace_back.
- * - Produce at least request.minimumPointsRequired points.
- * - Not call reserve() or resize() on @p outputBuffer (no allocations in the RT path).
+ * - Append new points to @p outputBuffer using `push_back` / `emplace_back`.
+ * - Produce at least `request.minimumPointsRequired` points.
+ * - Not call `reserve()` or `resize()` on @p outputBuffer (avoid allocations
+ *   inside the realtime path; the framework reserves large buffers up front).
  * - It may produce more than the minimum, up to outputBuffer.capacity().
  *
- * The caller will read outputBuffer.size() after the callback to know how many points were written.
+ * The caller reads outputBuffer.size() after the callback to know how many
+ * points were written.
  */
 using RequestPointsCallback =
     std::function<void(const PointFillRequest &request,
@@ -46,6 +48,11 @@ using RequestPointsCallback =
  * - Storing a user-provided callback.
  * - Requesting batches of new points via pullOnce().
  * - Accumulating generated points into an internal buffer for later use.
+ *
+ * Threading model:
+ * - Base manages a worker thread that calls virtual `run()` until `stop()`.
+ * - Derived classes implement `run()` (e.g., poll status, send points).
+ * - `running` is an atomic flag checked by the loop.
  */
 class LaserDeviceBase {
 public:

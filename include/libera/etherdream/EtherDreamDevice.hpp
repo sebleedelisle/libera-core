@@ -1,24 +1,18 @@
 
 
-// Ether Dream controller. 
-// To figure out! 
-// 1.   Connect to DAC
-//      Requires networking code for opening and connecting to a 
-//      TCP socket. Along with all the error checking that goes with
-//      that. 
-// 2.   Sending points.
-//      Convert from laser points to ether dream points.
-//      Create command packets
-// 3.   Main thread logic
-//      When to ask for more points. When to send them 
-// 4.   Receiving ACKs and parse 
-// 5.   Status information
-//      What is universal status info vs what is ether dream specific? 
-// TODO 
-// Start with a minimal example
-// Connects to network. 
-// Starts thread
-// Stops on stop command
+// EtherDream controller — high-level notes
+//
+// Responsibilities:
+// 1) Connect to the DAC over TCP.
+// 2) Periodically poll status (ACK + 20-byte dac_status), decode it, and react.
+// 3) Ask the user callback for more points and transmit them in device format.
+// 4) Manage its own worker loop (derived from LaserDeviceBase::run()).
+//
+// Design choices for clarity:
+// - Networking is delegated to `libera::net::TcpClient` for timeouts/cancellation.
+// - Status decoding is in `etherdream_schema.hpp` to keep wire parsing separate.
+// - The worker loop is a simple thread in this version; you can migrate to an
+//   `asio::steady_timer` on the io_context for a fully single-threaded design.
 
 
 // EtherDreamDevice.hpp
