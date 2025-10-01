@@ -6,6 +6,95 @@
 #include <thread>
 #include <iomanip>  // for std::setw, std::setfill, std::hex, std::dec
 #include <cstddef>  // for std::byte, std::to_integer
+#include <cstdint>
+#include <vector>
+
+namespace {
+
+//--------------------------------------------------------------------------
+// Immutable protocol constants used by every EtherDream frame we emit.
+//--------------------------------------------------------------------------
+constexpr std::size_t kEtherDreamHeaderSize = 1 + sizeof(std::uint16_t) * 2; // command + count + flags
+constexpr std::size_t kEtherDreamPointFieldCount = 9;                        // control + XYZRGBIU1U2
+constexpr std::size_t kEtherDreamPointSize = kEtherDreamPointFieldCount * sizeof(std::uint16_t);
+
+//--------------------------------------------------------------------------
+// Return a thread-local packet buffer so each worker thread reuses its own
+// memory slab. This avoids heap churn without needing external plumbing.
+//--------------------------------------------------------------------------
+inline std::vector<std::byte>& packetBuffer() {
+    static thread_local std::vector<std::byte> buffer;
+    return buffer;
+}
+
+//--------------------------------------------------------------------------
+// Extremely small helpers kept inline so the compiler can fold them away.
+//--------------------------------------------------------------------------
+inline void write_be16(std::byte*& dst, std::uint16_t value) noexcept {
+    *dst++ = std::byte((value >> 8) & 0xFFu);
+    *dst++ = std::byte(value & 0xFFu);
+}
+
+inline float clampFast(float v, float lo, float hi) noexcept {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+inline std::int32_t fastRound(float v) noexcept {
+    return static_cast<std::int32_t>(v >= 0.0f ? v + 0.5f : v - 0.5f);
+}
+
+inline std::uint16_t encodeCoordinate(float v) noexcept {
+    constexpr float kCoordScale = 32767.0f; // EtherDream expects signed 16-bit coordinates
+    const float scaled = clampFast(v, -1.0f, 1.0f) * kCoordScale;
+    const auto signedWord = static_cast<std::int16_t>(fastRound(scaled));
+    return static_cast<std::uint16_t>(signedWord);
+}
+
+inline std::uint16_t encodeChannel(float v) noexcept {
+    constexpr float kChannelScale = 65535.0f;
+    auto scaled = fastRound(clampFast(v, 0.0f, 1.0f) * kChannelScale);
+    if (scaled < 0) scaled = 0;
+    if (scaled > 65535) scaled = 65535;
+    return static_cast<std::uint16_t>(scaled);
+}
+
+//--------------------------------------------------------------------------
+// Serialize a batch of LaserPoint records into the thread-local packet.
+// Returns the valid byte count ready for transmission (0 when no data).
+//--------------------------------------------------------------------------
+inline std::size_t serializePoints(const std::vector<libera::core::LaserPoint>& points,
+                                   std::vector<std::byte>& packet) {
+    if (points.empty()) {
+        packet.clear(); // keep capacity for next tick but signal no payload
+        return 0;
+    }
+
+    packet.resize(kEtherDreamHeaderSize + points.size() * kEtherDreamPointSize);
+
+    auto* out = packet.data();
+    *out++ = std::byte{'d'}; // "data" command identifier per EtherDream spec
+
+    write_be16(out, static_cast<std::uint16_t>(points.size()));
+    write_be16(out, 0); // no flags for now
+
+    for (const auto& pt : points) {
+        write_be16(out, 0); // control bits remain zero until we add future features
+        write_be16(out, encodeCoordinate(pt.x));
+        write_be16(out, encodeCoordinate(pt.y));
+        write_be16(out, encodeChannel(pt.r));
+        write_be16(out, encodeChannel(pt.g));
+        write_be16(out, encodeChannel(pt.b));
+        write_be16(out, encodeChannel(pt.i));
+        write_be16(out, encodeChannel(pt.u1));
+        write_be16(out, encodeChannel(pt.u2));
+    }
+
+    return packet.size();
+}
+
+} // namespace
 
 using namespace std::chrono_literals; // enable 100ms / 1s literals
 
@@ -45,6 +134,24 @@ EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
     return {};
 }
 
+tl::expected<void, std::error_code>
+EtherDreamDevice::connect(const std::string& addressstring) {
+    libera::net::error_code ec;
+    auto ip = libera::net::asio::ip::make_address(addressstring, ec);
+    if (ec) {
+        std::cerr << "Invalid IP: " << ec.message() << "\n";
+        return tl::unexpected(std::error_code(ec.value(), ec.category()));
+    }
+
+    if (auto r = connect(ip); !r) {
+        std::cerr << "Connect failed: " << r.error().message() << "\n";
+        return r;
+    }
+
+    return {};
+}
+
+
 void EtherDreamDevice::close() {
     // Make this idempotent and keep internal state consistent.
     if (!tcpClient.is_open()) {
@@ -62,8 +169,11 @@ bool EtherDreamDevice::isConnected() const {
 }
 
 void EtherDreamDevice::run() {
+    // We tick at ~30 Hz which keeps up with real hardware without hogging CPU.
     constexpr auto tick = 33ms;
+    // Minimum batch size we insist on so the DAC FIFO stays comfortably primed.
     constexpr std::size_t minPointsPerTick = 1000;
+    // Safety valve: never let the staging buffer grow unbounded if the link drops.
     constexpr std::size_t maxBufferedPoints = 30000; // cap to avoid runaway
 
     // Small wire-up test: the EtherDream protocol responds to '?' with
@@ -87,10 +197,12 @@ void EtherDreamDevice::run() {
         }
 
 
+        // Build the request describing how many fresh points we need right now.
         core::PointFillRequest req;
         req.minimumPointsRequired = minPointsPerTick;
         req.estimatedFirstPointRenderTime = std::chrono::steady_clock::now() + tick;
 
+        // Ask the client callback for fresh geometry; this appends into pointsToSend.
         const bool gotPoints = pullOnce(req); // fills `newPoints`, appends to `pointsToSend`
 
         if (gotPoints) {
@@ -100,8 +212,21 @@ void EtherDreamDevice::run() {
         }
 
         if (gotPoints && isConnected()) {
-            // TODO: serialize & send via tcpClient.write_all(...)
-            pointsToSend.clear();
+            if (!pointsToSend.empty()) {
+                // Serialize into a per-thread buffer, then push the whole payload in one sys-call.
+                auto& packet = packetBuffer();
+                const std::size_t bytesToSend = serializePoints(pointsToSend, packet);
+
+                // Only attempt IO when we actually generated payload bytes.
+                if (bytesToSend > 0) {
+                    if (auto ec = tcpClient.write_all(packet.data(), bytesToSend, 100ms); ec) {
+                        std::cerr << "[EtherDreamDevice] write_all failed: " << ec.message() << "\n";
+                    } else {
+                        // Drop points once we know the DAC accepted the frame.
+                        pointsToSend.clear();
+                    }
+                }
+            }
         } else {
             // Not connected - do not let the buffer grow without bound.
             if (pointsToSend.size() > maxBufferedPoints) {
@@ -109,6 +234,7 @@ void EtherDreamDevice::run() {
             }
         }
 
+        // Sleep until the next frame boundary to honor the controller cadence.
         std::this_thread::sleep_for(tick);
     }
 }

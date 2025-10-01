@@ -18,9 +18,9 @@ set_property(CACHE SANITIZE PROPERTY STRINGS none address thread)
 # Apply only to Debug builds
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   if (SANITIZE STREQUAL "address")
-    set(SAN_FLAGS "-fsanitize=address,undefined -fno-omit-frame-pointer")
+    set(SAN_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer)
   elseif (SANITIZE STREQUAL "thread")
-    set(SAN_FLAGS "-fsanitize=thread -fno-omit-frame-pointer")
+    set(SAN_FLAGS -fsanitize=thread -fno-omit-frame-pointer)
   endif()
 
   if (SAN_FLAGS)

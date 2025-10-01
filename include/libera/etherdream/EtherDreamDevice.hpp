@@ -40,6 +40,8 @@ public:
 
     tl::expected<void, std::error_code>
     connect(const libera::net::asio::ip::address& address);
+    tl::expected<void, std::error_code>
+    connect(const std::string& addressstring); 
     void close();                        // idempotent
     bool isConnected() const;           // const-safe
 
