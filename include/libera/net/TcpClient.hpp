@@ -21,6 +21,7 @@
 #pragma once
 #include "libera/net/NetConfig.hpp"
 #include "libera/net/Deadline.hpp"
+#include "libera/net/TimeoutConfig.hpp"
 
 #include <chrono>
 
@@ -50,7 +51,7 @@ public:
     // We re-construct the socket with the strand each attempt to ensure a fresh
     // state (avoids leftover pending ops from prior attempts).
     template <typename Endpoints>
-    error_code connect(const Endpoints& endpoints, milliseconds timeout) {
+    error_code connect(const Endpoints& endpoints, milliseconds timeout = default_timeout()) {
         error_code last = asio::error::host_not_found;
 
         for (const auto& e : endpoints) {
@@ -68,7 +69,7 @@ public:
     // Overload 2: connect from resolver results (entries have .endpoint())
     // SFINAE ensures we pick this when Results::value_type has endpoint().
     template <typename Results>
-    error_code connect(Results results, milliseconds timeout,
+    error_code connect(Results results, milliseconds timeout = default_timeout(),
                        // SFINAE: prefer this when value_type has endpoint()
                        decltype(std::declval<typename Results::value_type>().endpoint(), 0) = 0) {
         error_code last = asio::error::host_not_found;
@@ -84,7 +85,7 @@ public:
         return last;
     }
 
-    error_code read_exact(void* buf, std::size_t n, milliseconds timeout) {
+    error_code read_exact(void* buf, std::size_t n, milliseconds timeout = default_timeout()) {
         auto ex = socket_.get_executor();
         return with_deadline(ex, timeout,
             [&](auto completion){
@@ -94,7 +95,7 @@ public:
         );
     }
 
-    error_code write_all(const void* buf, std::size_t n, milliseconds timeout) {
+    error_code write_all(const void* buf, std::size_t n, milliseconds timeout = default_timeout()) {
         auto ex = socket_.get_executor();
         return with_deadline(ex, timeout,
             [&](auto completion){
@@ -140,7 +141,7 @@ private:
         return e.endpoint();
     }
 
-    error_code connect_one(const tcp::endpoint& ep, milliseconds timeout) {
+    error_code connect_one(const tcp::endpoint& ep, milliseconds timeout = default_timeout()) {
         auto ex = socket_.get_executor();
         return with_deadline(ex, timeout,
             [&](auto completion){ socket_.async_connect(ep, completion); },

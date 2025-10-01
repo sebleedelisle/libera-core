@@ -21,6 +21,7 @@
 #include "libera/core/LaserDeviceBase.hpp"
 #include "libera/net/NetConfig.hpp"
 #include "libera/net/TcpClient.hpp"
+#include "libera/net/TimeoutConfig.hpp"
 #include "libera/etherdream/etherdream_schema.hpp"
 #include <optional>
 #include "tl/expected.hpp"
@@ -50,7 +51,7 @@ protected:
     void run() override;
 
     tl::expected<schema::DacStatus, std::error_code>
-        read_status(std::chrono::milliseconds timeout);
+        read_status(std::chrono::milliseconds timeout = libera::net::default_timeout());
 
 
 private:
