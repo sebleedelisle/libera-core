@@ -16,15 +16,14 @@
 namespace libera {
 
 template <typename T, typename E = std::error_code>
-using Expected = tl::expected<T, E>;
+using expected = tl::expected<T, E>;
 
 template <typename E>
-using Unexpected = tl::unexpected<E>;
+using unexpected_t = tl::unexpected<E>;
 
 template <typename E>
-[[nodiscard]] constexpr Unexpected<std::decay_t<E>> unexpected(E&& error) {
-    return Unexpected<std::decay_t<E>>(std::forward<E>(error));
+[[nodiscard]] constexpr unexpected_t<std::decay_t<E>> unexpected(E&& error) {
+    return unexpected_t<std::decay_t<E>>(std::forward<E>(error));
 }
 
 } // namespace libera
-

@@ -13,8 +13,6 @@ namespace libera::etherdream::config {
 
 // Networking -----------------------------------------------------------------
 constexpr unsigned short ETHERDREAM_DAC_PORT = 7765;
-constexpr std::chrono::milliseconds ETHERDREAM_DEFAULT_TIMEOUT{100};
-constexpr std::chrono::milliseconds ETHERDREAM_CONNECT_TIMEOUT{1000};
 
 // Streaming behaviour ---------------------------------------------------------
 constexpr std::chrono::milliseconds ETHERDREAM_MAX_LATENCY{50};

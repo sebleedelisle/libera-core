@@ -2,6 +2,7 @@
 #include "libera/net/NetConfig.hpp"
 #include <thread>
 #include <iostream>
+#include <memory>
 
 namespace libera::net {
 
@@ -19,7 +20,7 @@ namespace libera::net {
  *   avoids tricky multi-thread access to sockets.
  *
  * Key pieces:
- * - `asio::io_context` is the event loop for all async operations.
+ * - `asio::io_context` (shared_ptr-owned) is the event loop for all async operations.
  * - `executor_work_guard` prevents the loop from exiting when idle.
  * - A background `std::thread` calls `io_.run()` until destruction.
  *
@@ -28,39 +29,32 @@ namespace libera::net {
  *   their async handlers are cancelled/finished while the io_context still runs.
  * - In the destructor we reset the work guard, call `stop()`, and join the
  *   thread—this is the orderly shutdown sequence recommended by Asio.
+ *
+ * Convenience helpers:
+ * - Most code uses `libera::net::shared_io_context()` or `io_context()` to grab
+ *   the process-wide I/O loop owned by a static NetService instance. Tests can
+ *   still instantiate their own NetService for isolation.
  */
 class NetService {
 public:
-    NetService()
-    : io_()
-    , work_guard_(asio::make_work_guard(io_)) // keep io_context running
-    , t_([this]{ io_.run(); })                // launch worker thread
-    {
-        std::cout << "Creating NetService object"<< std::endl; 
-    }
-
-    ~NetService() {
-        // Tell work_guard we’re done, stop the context, and join thread
-        work_guard_.reset();
-        io_.stop();
-        if (t_.joinable()) t_.join();
-    }
+    NetService();
+    ~NetService();
 
     NetService(const NetService&) = delete;
     NetService& operator=(const NetService&) = delete;
     NetService(NetService&&) = delete;
     NetService& operator=(NetService&&) = delete;
 
-
-    // Provide access to the io_context
-    asio::io_context& io() { return io_; }
-    // If you need an executor (to bind timers/sockets) use io().get_executor().
-    // We keep it simple here and pass around references to io_context directly.
+    std::shared_ptr<asio::io_context> io() { return io_; }
 
 private:
-    asio::io_context io_;
+    std::shared_ptr<asio::io_context> io_;
     asio::executor_work_guard<asio::io_context::executor_type> work_guard_;
     std::thread t_;
 };
+
+NetService& ensureNetService();
+std::shared_ptr<asio::io_context> shared_io_context();
+asio::io_context& io_context();
 
 } // namespace libera::net

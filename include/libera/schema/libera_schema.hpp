@@ -39,9 +39,9 @@ namespace libera::schema {
 // Basics (C++17 shims)
 // ============================================================================
 template<class T, class E>
-using expected = ::libera::Expected<T, E>;
+using expected = ::libera::expected<T, E>;
 template<class E>
-using unexpected = ::libera::Unexpected<E>;
+using unexpected = ::libera::unexpected_t<E>;
 
 // Minimal read-only byte slice (stand-in for std::span<const std::byte>)
 struct ByteView {

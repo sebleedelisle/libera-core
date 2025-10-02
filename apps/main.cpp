@@ -1,4 +1,3 @@
-#include "libera/net/NetService.hpp"
 #include "libera/etherdream/EtherDreamDevice.hpp"
 #include <iostream>
 #include <chrono>
@@ -9,10 +8,7 @@ using namespace libera;
 
 int main() {
 
-    // creates the net service for the whole app
-    net::NetService net;
-
-    etherdream::EtherDreamDevice etherdream(net.io());
+    etherdream::EtherDreamDevice etherdream;
 
     // 3) Install your point-generation callback.
     //    This demonstrates the LaserDeviceBase contract: append N points to

@@ -9,8 +9,8 @@ This repository implements reusable building blocks for streaming laser control 
 
 ## Networking Setup
 - TCP connectivity is managed by `libera::net::TcpClient`; `EtherDreamDevice::connect()` resolves the configured port (`ETHERDREAM_DAC_PORT`) and enables low-latency options (TCP_NODELAY + keepalive) as soon as the socket comes up.
-- A library-wide default timeout is controlled through `libera::net::set_default_timeout()` (initialised from `ETHERDREAM_DEFAULT_TIMEOUT`). Any networking call can override the timeout, but omitting the argument keeps behaviour consistent and reduces boilerplate.
-- The worker loop starts with a protocol ping (`?`) to confirm the DAC is alive before entering the cadence-driven run loop, while connection attempts use `ETHERDREAM_CONNECT_TIMEOUT` for a longer grace period.
+- Networking calls rely on `libera::net::default_timeout()`; you can adjust the global value via `libera::net::set_default_timeout()` when tighter or looser timeouts are required.
+- The worker loop starts with a protocol ping (`?`) to confirm the DAC is alive before entering the cadence-driven run loop, reusing the shared timeout policy.
 - `waitForResponse()` blocks for the matching EtherDream ACK and returns the parsed status payload, so every command path picks up fresh device telemetry or surfaces transport errors immediately.
 
 ## Serialization Contract

@@ -22,8 +22,10 @@
 #include "libera/net/NetConfig.hpp"
 #include "libera/net/Deadline.hpp"
 #include "libera/net/TimeoutConfig.hpp"
+#include "libera/net/NetService.hpp"
 
 #include <chrono>
+#include <memory>
 
 namespace libera::net {
 using namespace std::chrono;
@@ -39,9 +41,10 @@ using namespace std::chrono;
  */
 class TcpClient {
 public:
-    explicit TcpClient(asio::io_context& io)
-    : socket_(io)
-    , strand_(asio::make_strand(io))
+    TcpClient()
+    : io_(shared_io_context())
+    , socket_(*io_)
+    , strand_(asio::make_strand(*io_))
     {}
 
     // Access to the socket (non-const)
@@ -149,6 +152,7 @@ private:
         );
     }
 
+    std::shared_ptr<asio::io_context> io_;
     tcp::socket socket_;
     asio::strand<asio::io_context::executor_type> strand_;
 };

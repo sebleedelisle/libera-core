@@ -29,13 +29,11 @@ inline std::error_code to_std_error(const libera::net::error_code& nec) {
 
 namespace libera::etherdream {
 
-EtherDreamDevice::EtherDreamDevice(libera::net::asio::io_context& ioContext)
-: tcpClient(ioContext)
-{
-    // Adopt the EtherDream default timeout globally so callers can rely on
-    // optional timeout parameters across the networking layer.
-    libera::net::set_default_timeout(config::ETHERDREAM_DEFAULT_TIMEOUT);
-}
+using libera::expected;
+using libera::unexpected;
+namespace ip = libera::net::asio::ip;
+
+EtherDreamDevice::EtherDreamDevice() = default;
 
 EtherDreamDevice::~EtherDreamDevice() {
     // Clean shutdown order:
@@ -45,18 +43,17 @@ EtherDreamDevice::~EtherDreamDevice() {
     close();
 }
 
-libera::Expected<void>
-EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
+expected<void>
+EtherDreamDevice::connect(const ip::address& address) {
 
     constexpr unsigned short port = config::ETHERDREAM_DAC_PORT;
     libera::net::tcp::endpoint endpoint(address, port);
 
-    const auto connectTimeout = config::ETHERDREAM_CONNECT_TIMEOUT;
-    libera::net::error_code ec = tcpClient.connect(std::array{endpoint}, connectTimeout);
+    libera::net::error_code ec = tcpClient.connect(std::array{endpoint});
     if (ec) {
         std::cerr << "[EtherDreamDevice] connect failed: " << ec.message()
                   << " (to " << address.to_string() << ":" << port << ")\n";
-        return libera::unexpected(std::error_code(ec.value(), ec.category()));
+        return unexpected(std::error_code(ec.value(), ec.category()));
     }
 
     tcpClient.setLowLatency(); // low jitter for realtime-ish streams
@@ -69,13 +66,13 @@ EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
     return {};
 }
 
-libera::Expected<void>
+expected<void>
 EtherDreamDevice::connect(const std::string& addressstring) {
     libera::net::error_code ec;
     auto ip = libera::net::asio::ip::make_address(addressstring, ec);
     if (ec) {
         std::cerr << "Invalid IP: " << ec.message() << "\n";
-        return libera::unexpected(std::error_code(ec.value(), ec.category()));
+        return unexpected(std::error_code(ec.value(), ec.category()));
     }
 
     if (auto r = connect(ip); !r) {
@@ -116,9 +113,9 @@ void EtherDreamDevice::run() {
     }
 
     // Step 1: wait for the initial '?' ACK immediately after connection.
-    auto initialAck = waitForResponse('?', config::ETHERDREAM_CONNECT_TIMEOUT);
+    auto initialAck = waitForResponse('?');
     if (!initialAck) {
-        if (auto pingAck = sendCommand('?', config::ETHERDREAM_DEFAULT_TIMEOUT); !pingAck) {
+        if (auto pingAck = sendCommand('?'); !pingAck) {
             handleFailure("initial ping", pingAck.error(), failureEncountered);
             return;
         } else {
@@ -226,17 +223,17 @@ void EtherDreamDevice::run() {
     close();
 }
 
-libera::Expected<EtherDreamDevice::DacAck>
+expected<EtherDreamDevice::DacAck>
 EtherDreamDevice::waitForResponse(char command, std::chrono::milliseconds timeout)
 {
     std::array<std::byte, 22> raw{};
 
     if (!tcpClient.is_open()) {
-        return libera::unexpected(make_error_code(std::errc::not_connected));
+        return unexpected(make_error_code(std::errc::not_connected));
     }
 
     if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeout); ec) {
-        return libera::unexpected(std::error_code(ec.value(), ec.category()));
+        return unexpected(std::error_code(ec.value(), ec.category()));
     }
 
     const char response = static_cast<char>(raw[0]);
@@ -246,7 +243,7 @@ EtherDreamDevice::waitForResponse(char command, std::chrono::milliseconds timeou
         std::cerr << "[EtherDreamDevice] Unexpected ACK sequence. Expected 'a' for command '"
                   << command << "' but received '" << response << "' for '"
                   << echoedCommand << "'.\n";
-        return libera::unexpected(make_error_code(std::errc::protocol_error));
+        return unexpected(make_error_code(std::errc::protocol_error));
     }
 
     auto decoded = schema::decodeStatus(
@@ -255,17 +252,17 @@ EtherDreamDevice::waitForResponse(char command, std::chrono::milliseconds timeou
         const auto& e = decoded.error();
         std::cerr << "[EtherDreamDevice] decodeStatus failed at '"
                   << e.where << "': " << e.what << "\n";
-        return libera::unexpected(make_error_code(std::errc::protocol_error));
+        return unexpected(make_error_code(std::errc::protocol_error));
     }
 
     return DacAck{*decoded, echoedCommand};
 }
 
-libera::Expected<EtherDreamDevice::DacAck>
+expected<EtherDreamDevice::DacAck>
 EtherDreamDevice::sendCommand(char command, std::chrono::milliseconds timeout) {
     const uint8_t cmdByte = static_cast<uint8_t>(command);
     if (auto ec = tcpClient.write_all(&cmdByte, 1, timeout); ec) {
-        return libera::unexpected(to_std_error(ec));
+        return unexpected(to_std_error(ec));
     }
     return waitForResponse(command, timeout);
 }

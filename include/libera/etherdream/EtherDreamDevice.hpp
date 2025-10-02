@@ -24,14 +24,18 @@
 #include "libera/net/TcpClient.hpp"
 #include "libera/net/TimeoutConfig.hpp"
 #include "libera/etherdream/etherdream_schema.hpp"
+#include <memory>
 #include <string_view>
 #include <optional>
 
 namespace libera::etherdream {
 
+using libera::expected;
+namespace ip = libera::net::asio::ip;
+
 class EtherDreamDevice : public libera::core::LaserDeviceBase {
 public:
-    explicit EtherDreamDevice(libera::net::asio::io_context& ioContext);
+    EtherDreamDevice();
     ~EtherDreamDevice();
 
     // non-copyable / non-movable
@@ -40,9 +44,9 @@ public:
     EtherDreamDevice(EtherDreamDevice&&) = delete;
     EtherDreamDevice& operator=(EtherDreamDevice&&) = delete;
 
-    libera::Expected<void>
-    connect(const libera::net::asio::ip::address& address);
-    libera::Expected<void>
+    expected<void>
+    connect(const ip::address& address);
+    expected<void>
     connect(const std::string& addressstring); 
     void close();                        // idempotent
     bool isConnected() const;           // const-safe
@@ -58,11 +62,11 @@ private:
         char command = 0;
     };
 
-    libera::Expected<DacAck>
+    expected<DacAck>
     waitForResponse(char command,
                     std::chrono::milliseconds timeout = libera::net::default_timeout());
 
-    libera::Expected<DacAck>
+    expected<DacAck>
     sendCommand(char command,
                 std::chrono::milliseconds timeout = libera::net::default_timeout());
 
