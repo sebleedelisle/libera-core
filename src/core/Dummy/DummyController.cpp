@@ -23,7 +23,7 @@ void DummyController::run() {
         req.minimumPointsRequired = 1000;
         req.estimatedFirstPointRenderTime = steady_clock::now();
 
-        bool ok = pullOnce(req);
+        bool ok = requestPoints(req);
         if (ok) {
             std::cout << "Pulled " << newPoints.size()
                       << " new points. Total buffered: "

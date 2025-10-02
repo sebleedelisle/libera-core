@@ -29,6 +29,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include "libera/core/Expected.hpp"
 #include <tl/expected.hpp>
 #include <sstream>
 
@@ -38,9 +39,9 @@ namespace libera::schema {
 // Basics (C++17 shims)
 // ============================================================================
 template<class T, class E>
-using expected = tl::expected<T, E>;
+using expected = ::libera::Expected<T, E>;
 template<class E>
-using unexpected = tl::unexpected<E>;
+using unexpected = ::libera::Unexpected<E>;
 
 // Minimal read-only byte slice (stand-in for std::span<const std::byte>)
 struct ByteView {

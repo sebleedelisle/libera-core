@@ -16,9 +16,12 @@ constexpr unsigned short ETHERDREAM_DAC_PORT = 7765;
 constexpr std::chrono::milliseconds ETHERDREAM_DEFAULT_TIMEOUT{100};
 constexpr std::chrono::milliseconds ETHERDREAM_CONNECT_TIMEOUT{1000};
 
-// Scheduling -----------------------------------------------------------------
+// Streaming behaviour ---------------------------------------------------------
+constexpr std::chrono::milliseconds ETHERDREAM_MAX_LATENCY{50};
 constexpr std::chrono::milliseconds ETHERDREAM_TICK_INTERVAL{33};
-constexpr std::size_t ETHERDREAM_MIN_POINTS_PER_TICK = 1000;
-constexpr std::size_t ETHERDREAM_MAX_BUFFERED_POINTS = 30000;
+constexpr std::size_t ETHERDREAM_BUFFER_CAPACITY = 16384;   // device FIFO depth in points
+constexpr std::size_t ETHERDREAM_MIN_PACKET_POINTS = 1000;  // minimum batch we want to ship
+constexpr std::chrono::milliseconds ETHERDREAM_MIN_SLEEP{5};
+constexpr std::chrono::milliseconds ETHERDREAM_MAX_SLEEP{50};
 
 } // namespace libera::etherdream::config

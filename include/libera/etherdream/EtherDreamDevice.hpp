@@ -18,13 +18,14 @@
 // EtherDreamDevice.hpp
 
 #pragma once
+#include "libera/core/Expected.hpp"
 #include "libera/core/LaserDeviceBase.hpp"
 #include "libera/net/NetConfig.hpp"
 #include "libera/net/TcpClient.hpp"
 #include "libera/net/TimeoutConfig.hpp"
 #include "libera/etherdream/etherdream_schema.hpp"
+#include <string_view>
 #include <optional>
-#include "tl/expected.hpp"
 
 namespace libera::etherdream {
 
@@ -39,9 +40,9 @@ public:
     EtherDreamDevice(EtherDreamDevice&&) = delete;
     EtherDreamDevice& operator=(EtherDreamDevice&&) = delete;
 
-    tl::expected<void, std::error_code>
+    libera::Expected<void>
     connect(const libera::net::asio::ip::address& address);
-    tl::expected<void, std::error_code>
+    libera::Expected<void>
     connect(const std::string& addressstring); 
     void close();                        // idempotent
     bool isConnected() const;           // const-safe
@@ -50,11 +51,37 @@ public:
 protected:
     void run() override;
 
-    tl::expected<schema::DacStatus, std::error_code>
-        read_status(std::chrono::milliseconds timeout = libera::net::default_timeout());
-
 
 private:
+    struct DacAck {
+        schema::DacStatus status{};
+        char command = 0;
+    };
+
+    libera::Expected<DacAck>
+    waitForResponse(char command,
+                    std::chrono::milliseconds timeout = libera::net::default_timeout());
+
+    libera::Expected<DacAck>
+    sendCommand(char command,
+                std::chrono::milliseconds timeout = libera::net::default_timeout());
+
+    static std::size_t calculateMinimumPoints(const schema::DacStatus& status,
+                                              std::chrono::milliseconds maxLatency);
+
+    static std::size_t clampDesiredPoints(std::size_t minimumPointsNeeded,
+                                          std::size_t minPacketPoints,
+                                          std::size_t bufferFree);
+
+    static std::chrono::milliseconds computeSleepDuration(const schema::DacStatus& status,
+                                                          std::size_t bufferCapacity,
+                                                          std::size_t minPacketPoints);
+
+    void handleFailure(std::string_view where,
+                       const std::error_code& ec,
+                       bool& failureEncountered);
+
+    schema::DacStatus lastKnownStatus{};
     libera::net::TcpClient tcpClient;
     std::optional<libera::net::asio::ip::address> rememberedAddress{};
 };

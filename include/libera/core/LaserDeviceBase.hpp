@@ -16,6 +16,11 @@ struct PointFillRequest {
     /// Minimum number of points that must be produced by the callback.
     std::size_t minimumPointsRequired = 0;
 
+    /// Maximum number of points that should be produced by the callback.
+    /// A value of 0 means "no upper bound"; callers can tighten this to cap
+    /// buffer growth when device FIFO space is limited.
+    std::size_t maximumPointsRequired = 0;
+
     /// Host-side estimate of when the first point in this batch will reach the mirrors.
     /// (This is advisory — implementations can ignore or use it for scheduling.)
     std::chrono::steady_clock::time_point estimatedFirstPointRenderTime{};
@@ -29,6 +34,7 @@ struct PointFillRequest {
  * The callback must:
  * - Append new points to @p outputBuffer using `push_back` / `emplace_back`.
  * - Produce at least `request.minimumPointsRequired` points.
+ * - Produce no more than `request.maximumPointsRequired` when it is non-zero.
  * - Not call `reserve()` or `resize()` on @p outputBuffer (avoid allocations
  *   inside the realtime path; the framework reserves large buffers up front).
  * - It may produce more than the minimum, up to outputBuffer.capacity().
@@ -46,7 +52,7 @@ using RequestPointsCallback =
  * Subclasses (e.g. EtherDreamController, HeliosController) are responsible
  * for actually sending points to hardware. This base class only handles:
  * - Storing a user-provided callback.
- * - Requesting batches of new points via pullOnce().
+ * - Requesting batches of new points via requestPoints().
  * - Accumulating generated points into an internal buffer for later use.
  *
  * Threading model:
@@ -73,13 +79,13 @@ public:
     /**
      * @brief Ask the callback for more points and append them to the main buffer.
      *
-     * Typical usage is from a hardware-specific run loop: call pullOnce() to
-     * generate points, then send pointsToSend to the DAC.
+     * Typical usage is from a hardware-specific run loop: call requestPoints() to
+     * invoke the user-supplied callback, then send pointsToSend to the DAC.
      *
      * @param request Fill request (min points required, estimated render time).
      * @return false if no callback is installed, true if points were appended.
      */
-    bool pullOnce(const PointFillRequest &request);
+    bool requestPoints(const PointFillRequest &request);
 
 
      /// Start the worker thread.
@@ -102,7 +108,7 @@ protected:
     /// Main buffer of points pending transmission to the DAC.
     std::vector<LaserPoint> pointsToSend;
 
-    /// Scratch buffer for a single pullOnce() batch (reused each call).
+    /// Scratch buffer for a single requestPoints() batch (reused each call).
     std::vector<LaserPoint> newPoints;
 
 

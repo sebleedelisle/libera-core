@@ -54,7 +54,17 @@
         "__config": "cpp",
         "exception": "cpp",
         "expected": "cpp",
-        "cstddef": "cpp"
+        "cstddef": "cpp",
+        "any": "cpp",
+        "charconv": "cpp",
+        "codecvt": "cpp",
+        "condition_variable": "cpp",
+        "csignal": "cpp",
+        "future": "cpp",
+        "iomanip": "cpp",
+        "list": "cpp",
+        "source_location": "cpp",
+        "span": "cpp"
     }, 
       "C_Cpp.default.cppStandard": "c++17",
       "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"

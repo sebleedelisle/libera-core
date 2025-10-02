@@ -8,15 +8,24 @@
 #include "libera/etherdream/EtherDreamProtocol.hpp"
 #include "libera/net/TimeoutConfig.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <iostream>
+#include <string_view>
+#include <system_error>
 #include <thread>
-#include <iomanip>  // for std::setw, std::setfill, std::hex, std::dec
 #include <cstddef>  // for std::byte, std::to_integer
 #include <cstdint>
 
 using namespace std::chrono_literals; // enable 100ms / 1s literals
+
+namespace {
+inline std::error_code to_std_error(const libera::net::error_code& nec) {
+    return std::error_code(nec.value(), nec.category());
+}
+} // namespace
 
 namespace libera::etherdream {
 
@@ -36,7 +45,7 @@ EtherDreamDevice::~EtherDreamDevice() {
     close();
 }
 
-tl::expected<void, std::error_code>
+libera::Expected<void>
 EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
 
     constexpr unsigned short port = config::ETHERDREAM_DAC_PORT;
@@ -47,7 +56,7 @@ EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
     if (ec) {
         std::cerr << "[EtherDreamDevice] connect failed: " << ec.message()
                   << " (to " << address.to_string() << ":" << port << ")\n";
-        return tl::unexpected(std::error_code(ec.value(), ec.category()));
+        return libera::unexpected(std::error_code(ec.value(), ec.category()));
     }
 
     tcpClient.setLowLatency(); // low jitter for realtime-ish streams
@@ -60,13 +69,13 @@ EtherDreamDevice::connect(const libera::net::asio::ip::address& address) {
     return {};
 }
 
-tl::expected<void, std::error_code>
+libera::Expected<void>
 EtherDreamDevice::connect(const std::string& addressstring) {
     libera::net::error_code ec;
     auto ip = libera::net::asio::ip::make_address(addressstring, ec);
     if (ec) {
         std::cerr << "Invalid IP: " << ec.message() << "\n";
-        return tl::unexpected(std::error_code(ec.value(), ec.category()));
+        return libera::unexpected(std::error_code(ec.value(), ec.category()));
     }
 
     if (auto r = connect(ip); !r) {
@@ -95,117 +104,230 @@ bool EtherDreamDevice::isConnected() const {
 }
 
 void EtherDreamDevice::run() {
-    // We tick at ~30 Hz which keeps up with real hardware without hogging CPU.
-    const auto tick = config::ETHERDREAM_TICK_INTERVAL;
-    // Minimum batch size we insist on so the DAC FIFO stays comfortably primed.
-    const auto minPointsPerTick = config::ETHERDREAM_MIN_POINTS_PER_TICK;
-    // Safety valve: never let the staging buffer grow unbounded if the link drops.
-    const auto maxBufferedPoints = config::ETHERDREAM_MAX_BUFFERED_POINTS;
+    const auto bufferCapacity = config::ETHERDREAM_BUFFER_CAPACITY;
+    const auto minPacketPoints = config::ETHERDREAM_MIN_PACKET_POINTS;
+    const auto maxLatency = config::ETHERDREAM_MAX_LATENCY;
+    bool failureEncountered = false;
 
-    // Small wire-up test: the EtherDream protocol responds to '?' with
-    // an ACK ('a') plus a 20-byte status. This helps verify connectivity.
-    std::cout << "Sending ping" << std::endl;
-    uint8_t cmd = '?';
-    libera::net::error_code ec = tcpClient.write_all(&cmd, 1);
-    if(ec) { 
-        std::cerr << "Error sending ping " << ec.message() << std::endl;
+    if (!tcpClient.is_open()) {
+        std::cerr << "[EtherDreamDevice] run() called without an active connection.\n";
+        running = false;
+        return;
     }
-  
-    while (running) {
-        if (isConnected()) {
-            if (auto st = read_status(); st) {
-                // use st->buffer_fullness, st->playback_state, etc.
-                std::cout << "Received response " << (int)(st->playbackState) << std::endl;
-            } else {
-                // decode or IO error - up to you whether to close/retry/log
-                std::cerr << st.error().message() << "\n";
-            }
-        }
 
-
-        // Build the request describing how many fresh points we need right now.
-        core::PointFillRequest req;
-        req.minimumPointsRequired = minPointsPerTick;
-        req.estimatedFirstPointRenderTime = std::chrono::steady_clock::now() + tick;
-
-        // Ask the client callback for fresh geometry; this appends into pointsToSend.
-        const bool gotPoints = pullOnce(req); // fills `newPoints`, appends to `pointsToSend`
-
-        if (gotPoints) {
-            std::cout << "Pulled " << newPoints.size()
-                      << " new points. Total buffered: "
-                      << pointsToSend.size() << std::endl;
-        }
-
-        if (gotPoints && isConnected()) {
-            if (!pointsToSend.empty()) {
-                // Serialize into a per-thread buffer, then push the whole payload in one sys-call.
-                const auto packet = protocol::serializePoints(pointsToSend);
-
-                if (!packet.empty()) {
-                    if (auto ec = tcpClient.write_all(packet.data, packet.size); ec) {
-                        std::cerr << "[EtherDreamDevice] write_all failed: " << ec.message() << "\n";
-                    } else {
-                        // Drop points once we know the DAC accepted the frame.
-                        pointsToSend.clear();
-                    }
-                }
-            }
+    // Step 1: wait for the initial '?' ACK immediately after connection.
+    auto initialAck = waitForResponse('?', config::ETHERDREAM_CONNECT_TIMEOUT);
+    if (!initialAck) {
+        if (auto pingAck = sendCommand('?', config::ETHERDREAM_DEFAULT_TIMEOUT); !pingAck) {
+            handleFailure("initial ping", pingAck.error(), failureEncountered);
+            return;
         } else {
-            // Not connected - do not let the buffer grow without bound.
-            if (pointsToSend.size() > maxBufferedPoints) {
-                pointsToSend.clear();
+            initialAck = pingAck;
+        }
+    }
+    lastKnownStatus = initialAck->status;
+
+    if (auto prepareAck = sendCommand('p'); !prepareAck) {
+        handleFailure("prepare command", prepareAck.error(), failureEncountered);
+        return;
+    } else {
+        lastKnownStatus = prepareAck->status;
+    }
+
+    // Main streaming loop.
+    while (running) {
+        const std::size_t bufferFullness = lastKnownStatus.bufferFullness;
+        const std::size_t bufferFree = bufferCapacity > bufferFullness
+            ? bufferCapacity - bufferFullness
+            : 0;
+
+        const std::size_t minimumPointsNeeded =
+            calculateMinimumPoints(lastKnownStatus, maxLatency);
+        const std::size_t desiredPoints =
+            clampDesiredPoints(minimumPointsNeeded, minPacketPoints, bufferFree);
+
+        bool sentFrameThisIteration = false;
+
+        // Step 4: generate and send a packet when the FIFO needs more data.
+        if (desiredPoints > 0) {
+            pointsToSend.clear();
+
+            core::PointFillRequest req;
+            req.minimumPointsRequired = desiredPoints;
+            req.maximumPointsRequired = bufferFree;
+            req.estimatedFirstPointRenderTime =
+                std::chrono::steady_clock::now() + maxLatency;
+
+            const bool producedPoints = requestPoints(req);
+            if (!producedPoints || pointsToSend.size() < desiredPoints) {
+                handleFailure("point generation", std::make_error_code(std::errc::no_message_available), failureEncountered);
+                break;
+            }
+
+            // Cap the packet to avoid overfilling the device FIFO.
+            if (pointsToSend.size() > bufferFree) {
+                pointsToSend.resize(bufferFree);
+            }
+
+            const auto packet = protocol::serializePoints(pointsToSend);
+            if (packet.empty()) {
+                handleFailure("packet serialization", std::make_error_code(std::errc::invalid_argument), failureEncountered);
+                break;
+            }
+
+            if (auto ec = tcpClient.write_all(packet.data, packet.size); ec) {
+                handleFailure("stream write", to_std_error(ec), failureEncountered);
+                break;
+            }
+
+            if (auto dataAck = waitForResponse('d'); !dataAck) {
+                handleFailure("waiting for data ACK", dataAck.error(), failureEncountered);
+                break;
+            } else {
+                lastKnownStatus = dataAck->status;
+            }
+
+            pointsToSend.clear();
+            sentFrameThisIteration = true;
+        }
+
+        // Step 5: ensure playback is running.
+        if (lastKnownStatus.playbackState != schema::PlaybackState::Playing) {
+            if (auto beginAck = sendCommand('b'); !beginAck) {
+                handleFailure("begin command", beginAck.error(), failureEncountered);
+                break;
+            } else {
+                lastKnownStatus = beginAck->status;
             }
         }
 
-        // Sleep until the next frame boundary to honor the controller cadence.
-        std::this_thread::sleep_for(tick);
+        const auto sleepDuration = computeSleepDuration(lastKnownStatus, bufferCapacity, minPacketPoints);
+        if (sleepDuration.count() > 0) {
+            std::this_thread::sleep_for(sleepDuration);
+        }
+
+        // Step 7: loop. If we did not send a frame we may want a fresh status snapshot
+        // to avoid stale buffer fullness. A lightweight ping keeps the state current.
+        if (!sentFrameThisIteration) {
+            if (auto statusAck = sendCommand('?'); statusAck) {
+                lastKnownStatus = statusAck->status;
+            }
+        }
     }
+
+    if (!tcpClient.is_open()) {
+        return;
+    }
+
+    if (!failureEncountered) {
+        return;
+    }
+
+    close();
 }
-tl::expected<schema::DacStatus, std::error_code>
-EtherDreamDevice::read_status(std::chrono::milliseconds timeout)
+
+libera::Expected<EtherDreamDevice::DacAck>
+EtherDreamDevice::waitForResponse(char command, std::chrono::milliseconds timeout)
 {
     std::array<std::byte, 22> raw{};
 
     if (!tcpClient.is_open()) {
-        return tl::unexpected(make_error_code(std::errc::not_connected));
+        return libera::unexpected(make_error_code(std::errc::not_connected));
     }
 
-    libera::net::error_code ec = tcpClient.read_exact(raw.data(), raw.size(), timeout);
-    if (ec) {
-        return tl::unexpected(std::error_code(ec.value(), ec.category()));
+    if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeout); ec) {
+        return libera::unexpected(std::error_code(ec.value(), ec.category()));
     }
 
-    // Debug dump
-    std::cout << "read 22 bytes: ";
-    for (auto b : raw) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0')
-                  << std::to_integer<int>(b) << " ";
-    }
-    std::cout << std::dec << std::endl;
+    const char response = static_cast<char>(raw[0]);
+    const char echoedCommand = static_cast<char>(raw[1]);
 
-    // First two bytes = response + command
-    uint8_t response = static_cast<uint8_t>(raw[0]);
-    uint8_t command  = static_cast<uint8_t>(raw[1]);
-
-    if (response != 'a') {
-        std::cerr << "[EtherDreamDevice] non-ACK response: "
-                  << static_cast<char>(response)
-                  << " to command " << static_cast<char>(command) << "\n";
-        return tl::unexpected(make_error_code(std::errc::protocol_error));
+    if (response != 'a' || echoedCommand != command) {
+        std::cerr << "[EtherDreamDevice] Unexpected ACK sequence. Expected 'a' for command '"
+                  << command << "' but received '" << response << "' for '"
+                  << echoedCommand << "'.\n";
+        return libera::unexpected(make_error_code(std::errc::protocol_error));
     }
 
-    // Remaining 20 bytes = dac_status
     auto decoded = schema::decodeStatus(
         libera::schema::ByteView{raw.data() + 2, 20});
     if (!decoded) {
         const auto& e = decoded.error();
         std::cerr << "[EtherDreamDevice] decodeStatus failed at '"
                   << e.where << "': " << e.what << "\n";
-        return tl::unexpected(make_error_code(std::errc::protocol_error));
+        return libera::unexpected(make_error_code(std::errc::protocol_error));
     }
 
-    return *decoded;
+    return DacAck{*decoded, echoedCommand};
+}
+
+libera::Expected<EtherDreamDevice::DacAck>
+EtherDreamDevice::sendCommand(char command, std::chrono::milliseconds timeout) {
+    const uint8_t cmdByte = static_cast<uint8_t>(command);
+    if (auto ec = tcpClient.write_all(&cmdByte, 1, timeout); ec) {
+        return libera::unexpected(to_std_error(ec));
+    }
+    return waitForResponse(command, timeout);
+}
+
+std::size_t
+EtherDreamDevice::calculateMinimumPoints(const schema::DacStatus& status,
+                                         std::chrono::milliseconds maxLatency) {
+    if (status.pointRate == 0 || maxLatency.count() <= 0) {
+        return 0;
+    }
+
+    const double requiredPoints =
+        (static_cast<double>(status.pointRate) * static_cast<double>(maxLatency.count())) / 1000.0;
+    if (requiredPoints <= static_cast<double>(status.bufferFullness)) {
+        return 0;
+    }
+
+    const double deficit = requiredPoints - static_cast<double>(status.bufferFullness);
+    return static_cast<std::size_t>(std::ceil(deficit));
+}
+
+std::size_t
+EtherDreamDevice::clampDesiredPoints(std::size_t minimumPointsNeeded,
+                                     std::size_t minPacketPoints,
+                                     std::size_t bufferFree) {
+    if (bufferFree == 0) {
+        return 0;
+    }
+
+    const std::size_t baseline = std::max(minimumPointsNeeded, minPacketPoints);
+    return std::min(baseline, bufferFree);
+}
+
+std::chrono::milliseconds
+EtherDreamDevice::computeSleepDuration(const schema::DacStatus& status,
+                                       std::size_t bufferCapacity,
+                                       std::size_t minPacketPoints) {
+    if (status.pointRate == 0) {
+        return config::ETHERDREAM_MAX_SLEEP;
+    }
+
+    const std::size_t bufferFree = bufferCapacity > status.bufferFullness
+        ? bufferCapacity - status.bufferFullness
+        : 0;
+
+    if (bufferFree >= minPacketPoints) {
+        return config::ETHERDREAM_MIN_SLEEP;
+    }
+
+    const std::size_t pointsNeeded = minPacketPoints - bufferFree;
+    const double ms = (static_cast<double>(pointsNeeded) * 1000.0)
+                    / static_cast<double>(std::max<std::uint32_t>(status.pointRate, 1u));
+    auto duration = std::chrono::milliseconds(static_cast<std::int64_t>(std::ceil(ms)));
+    return std::clamp(duration, config::ETHERDREAM_MIN_SLEEP, config::ETHERDREAM_MAX_SLEEP);
+}
+
+void EtherDreamDevice::handleFailure(std::string_view where,
+                                     const std::error_code& ec,
+                                     bool& failureEncountered) {
+    std::cerr << "[EtherDreamDevice] " << where << " failed: " << ec.message() << "\n";
+    running = false;
+    failureEncountered = true;
 }
 
 

@@ -20,7 +20,7 @@ void LaserDeviceBase::setRequestPointsCallback(const RequestPointsCallback &call
     requestPointsCallback = callback;
 }
 
-bool LaserDeviceBase::pullOnce(const PointFillRequest &request) {
+bool LaserDeviceBase::requestPoints(const PointFillRequest &request) {
     if (!requestPointsCallback) {
         // No callback set — cannot produce points.
         return false;
@@ -36,10 +36,14 @@ bool LaserDeviceBase::pullOnce(const PointFillRequest &request) {
     // at least the requested minimum number of points.
     assert(newPoints.size() >= request.minimumPointsRequired &&
            "Callback did not provide the minimum required number of points.");
+    if (request.maximumPointsRequired > 0) {
+        assert(newPoints.size() <= request.maximumPointsRequired &&
+               "Callback produced more points than allowed by maximumPointsRequired.");
+    }
 
     // Append the newly generated batch to the main buffer.
     // Note: we intentionally keep `newPoints` separate to easily inspect how
-    // many were produced in a single `pullOnce` call and to avoid allocations.
+    // many were produced in a single requestPoints() call and to avoid allocations.
     pointsToSend.insert(pointsToSend.end(), newPoints.begin(), newPoints.end());
 
     return true;

@@ -21,7 +21,7 @@ int main() {
     req.minimumPointsRequired = 10;
     req.estimatedFirstPointRenderTime = std::chrono::steady_clock::now();
 
-    const bool ok = ctl.pullOnce(req);
-    std::cout << "Smoke test: pullOnce returned " << (ok ? "true" : "false") << "\n";
+    const bool ok = ctl.requestPoints(req);
+    std::cout << "Smoke test: requestPoints returned " << (ok ? "true" : "false") << "\n";
     return ok ? 0 : 1;
 }
