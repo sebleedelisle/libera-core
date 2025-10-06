@@ -33,7 +33,7 @@
 namespace libera::net {
 
 template<typename StartAsync, typename Cancel>
-error_code with_deadline(
+std::error_code with_deadline(
     asio::any_io_executor ex,
     std::chrono::milliseconds timeout,
     StartAsync start_async,
@@ -43,14 +43,14 @@ error_code with_deadline(
         std::mutex m;
         std::condition_variable cv;
         bool done = false;
-        error_code ec = asio::error::would_block;
+        std::error_code ec = asio::error::would_block;
     };
 
     auto st = std::make_shared<State>();
-    asio::steady_timer timer(ex);
+    auto timer = std::make_shared<asio::steady_timer>(ex);
 
     // Completion of the user async op
-    auto op_handler = [st, &timer](const error_code& op_ec, auto&&... /*ignored*/) {
+    auto op_handler = [st, timer](const std::error_code& op_ec, auto&&... /*ignored*/) {
         {
             std::lock_guard<std::mutex> lk(st->m);
             if (st->done) return;           // another path already won
@@ -58,15 +58,15 @@ error_code with_deadline(
             st->done = true;
         }
         st->cv.notify_one();                // wake waiter first...
-        timer.cancel();                     // ...then cancel timer (handler must be benign)
+        timer->cancel();                    // ...then cancel timer (handler must be benign)
     };
 
     // Kick off the async operation (it must call our op_handler)
     start_async(op_handler);
 
     // Arm the deadline
-    timer.expires_after(timeout);
-    timer.async_wait([st, cancel](const error_code& tec){
+    timer->expires_after(timeout);
+    timer->async_wait([st, cancel, timer](const std::error_code& tec){
         if (tec == asio::error::operation_aborted) {
             // Cancelled because op finished — do nothing.
             return;

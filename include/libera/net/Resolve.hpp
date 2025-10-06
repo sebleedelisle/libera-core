@@ -13,13 +13,13 @@ using tcp = asio::ip::tcp;
  * if you want to connect by name rather than raw IPs. It is used with the
  * TCP client connect overload that accepts resolver results.
  */
-inline libera::net::error_code resolve(
+inline std::error_code resolve(
     asio::io_context& io,
     const std::string& host,
     const std::string& service,
     tcp::resolver::results_type& out)
 {
-    libera::net::error_code ec;
+    std::error_code ec;
     tcp::resolver r(io);
     out = r.resolve(host, service, ec);
     return ec;

@@ -22,7 +22,7 @@
 #include "libera/core/LaserDeviceBase.hpp"
 #include "libera/net/NetConfig.hpp"
 #include "libera/net/TcpClient.hpp"
-#include "libera/net/TimeoutConfig.hpp"
+#include "libera/etherdream/EtherDreamConfig.hpp"
 #include "libera/etherdream/etherdream_schema.hpp"
 #include <memory>
 #include <string_view>
@@ -33,6 +33,13 @@ namespace libera::etherdream {
 using libera::expected;
 namespace ip = libera::net::asio::ip;
 
+/**
+ * @brief Streaming controller that talks to an EtherDream DAC.
+ *
+ * The device inherits latency management, worker thread lifecycle, and point
+ * buffering from LaserDeviceBase. The latency budget exposed by the base class
+ * is used both for sizing refill batches and for per-operation TCP deadlines.
+ */
 class EtherDreamDevice : public libera::core::LaserDeviceBase {
 public:
     EtherDreamDevice();
@@ -44,10 +51,24 @@ public:
     EtherDreamDevice(EtherDreamDevice&&) = delete;
     EtherDreamDevice& operator=(EtherDreamDevice&&) = delete;
 
+    /**
+     * @brief Connect to the DAC using a resolved IP address.
+     * @param address Target address.
+     * @param port EtherDream TCP port (defaults to 7765).
+     */
     expected<void>
-    connect(const ip::address& address);
+    connect(const ip::address& address,
+            unsigned short port = config::ETHERDREAM_DAC_PORT_DEFAULT);
+
+    /**
+     * @brief Convenience overload that parses dotted quad strings.
+     * @param addressstring IPv4 string (e.g. "192.168.0.50").
+     * @param port EtherDream TCP port (defaults to 7765).
+     */
     expected<void>
-    connect(const std::string& addressstring); 
+    connect(const std::string& addressstring,
+            unsigned short port = config::ETHERDREAM_DAC_PORT_DEFAULT);
+
     void close();                        // idempotent
     bool isConnected() const;           // const-safe
 
@@ -62,13 +83,17 @@ private:
         char command = 0;
     };
 
+    /// Wait for the "a" response frame to a specific command.
     expected<DacAck>
-    waitForResponse(char command,
-                    std::chrono::milliseconds timeout = libera::net::default_timeout());
+    waitForResponse(char command);
 
+    /// Send a single-byte command and synchronously wait for its ACK.
     expected<DacAck>
-    sendCommand(char command,
-                std::chrono::milliseconds timeout = libera::net::default_timeout());
+    sendCommand(char command);
+
+    /// Issue the point-rate command ('q') and return the associated ACK.
+    expected<DacAck>
+    setPointRate(std::uint16_t rate);
 
     static std::size_t calculateMinimumPoints(const schema::DacStatus& status,
                                               std::chrono::milliseconds maxLatency);

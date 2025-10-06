@@ -94,10 +94,26 @@ public:
     /// Request the thread to stop and wait for it to finish.
     void stop();
 
+    /**
+     * @brief Set the target latency budget between point submission and playback (milliseconds).
+     *
+     * Derived devices use this to size refill batches and tune socket timeouts.
+     * Values less than 1 ms are clamped to 1 to avoid zero-length deadlines.
+     */
+    void setLatency(long long latencyMillisValue);
+
+    /**
+     * @brief Retrieve the currently configured latency budget in milliseconds.
+     */
+    long long getLatency() const;
+
 protected:
 
 
     virtual void run() = 0; // the worker loop
+
+    /// Latency budget shared by all laser devices (defaults to 50 ms).
+    std::atomic<long long> latencyMillis{50};
 
     std::thread worker;
     std::atomic<bool> running{false};

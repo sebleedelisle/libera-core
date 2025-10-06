@@ -68,5 +68,17 @@ void LaserDeviceBase::stop() {
 }
 
 
+void LaserDeviceBase::setLatency(long long latencyMillisValue) {
+    if (latencyMillisValue < 1) {
+        latencyMillisValue = 1;
+    }
+    latencyMillis.store(latencyMillisValue, std::memory_order_relaxed);
+}
+
+long long LaserDeviceBase::getLatency() const {
+    return latencyMillis.load(std::memory_order_relaxed);
+}
+
+
 
 } // namespace libera::core

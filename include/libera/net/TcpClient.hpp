@@ -28,7 +28,7 @@
 #include <memory>
 
 namespace libera::net {
-using namespace std::chrono;
+using std::chrono::milliseconds;
 
 /**
  * TcpClient
@@ -51,18 +51,20 @@ public:
     tcp::socket& socket() { return socket_; }
 
     // Overload 1: connect from a range/container of *endpoints* (e.g., std::array<tcp::endpoint, N>)
-    // We re-construct the socket with the strand each attempt to ensure a fresh
-    // state (avoids leftover pending ops from prior attempts).
+    // Delegates to the single-endpoint overload so each attempt resets the socket
+    // before calling connect_one().
+    std::error_code connect(const tcp::endpoint& endpoint, long long timeoutMillis = default_timeout()) {
+        close();
+        socket_ = tcp::socket(strand_);
+        return connect_one(endpoint, timeoutMillis);
+    }
+
     template <typename Endpoints>
-    error_code connect(const Endpoints& endpoints, milliseconds timeout = default_timeout()) {
-        error_code last = asio::error::host_not_found;
+    std::error_code connect(const Endpoints& endpoints, long long timeoutMillis = default_timeout()) {
+        std::error_code last = asio::error::host_not_found;
 
         for (const auto& e : endpoints) {
-            // Fresh socket for each attempt: construct with the strand executor
-            close();
-            socket_ = tcp::socket(strand_);   // NOTE: pass the executor, not the context
-
-            auto ec = connect_one(endpoint_of(e), timeout);
+            auto ec = connect(endpoint_of(e), timeoutMillis);
             if (!ec) return ec;   // success
             last = ec;            // remember last error and try next
         }
@@ -72,24 +74,22 @@ public:
     // Overload 2: connect from resolver results (entries have .endpoint())
     // SFINAE ensures we pick this when Results::value_type has endpoint().
     template <typename Results>
-    error_code connect(Results results, milliseconds timeout = default_timeout(),
+    std::error_code connect(Results results, long long timeoutMillis = default_timeout(),
                        // SFINAE: prefer this when value_type has endpoint()
                        decltype(std::declval<typename Results::value_type>().endpoint(), 0) = 0) {
-        error_code last = asio::error::host_not_found;
+        std::error_code last = asio::error::host_not_found;
 
         for (auto& e : results) {
-            close();
-            socket_ = tcp::socket(strand_);
-
-            auto ec = connect_one(e.endpoint(), timeout);
+            auto ec = connect(e.endpoint(), timeoutMillis);
             if (!ec) return ec;
             last = ec;
         }
         return last;
     }
 
-    error_code read_exact(void* buf, std::size_t n, milliseconds timeout = default_timeout()) {
+    std::error_code read_exact(void* buf, std::size_t n, long long timeoutMillis = default_timeout()) {
         auto ex = socket_.get_executor();
+        const auto timeout = clamp_to_milliseconds(timeoutMillis);
         return with_deadline(ex, timeout,
             [&](auto completion){
                 asio::async_read(socket_, asio::buffer(buf, n), completion);
@@ -98,8 +98,9 @@ public:
         );
     }
 
-    error_code write_all(const void* buf, std::size_t n, milliseconds timeout = default_timeout()) {
+    std::error_code write_all(const void* buf, std::size_t n, long long timeoutMillis = default_timeout()) {
         auto ex = socket_.get_executor();
+        const auto timeout = clamp_to_milliseconds(timeoutMillis);
         return with_deadline(ex, timeout,
             [&](auto completion){
                 asio::async_write(socket_, asio::buffer(buf, n), completion);
@@ -109,7 +110,7 @@ public:
     }
 
     void setLowLatency() {
-        error_code ec;
+        std::error_code ec;
         socket_.set_option(tcp::no_delay(true), ec);
         socket_.set_option(asio::socket_base::keep_alive(true), ec);
     }
@@ -122,13 +123,13 @@ public:
     // Useful during shutdown to nudge operations to complete now rather than
     // waiting for timeouts.
     void cancel() {
-        error_code ec;
+        std::error_code ec;
         socket_.cancel(ec);
     }
 
     void close() {
         if (!socket_.is_open()) return;
-        error_code ec;
+        std::error_code ec;
         // Proactively cancel any outstanding operations first (pattern: cancel → shutdown → close)
         socket_.cancel(ec);
         socket_.shutdown(tcp::socket::shutdown_both, ec);
@@ -144,12 +145,20 @@ private:
         return e.endpoint();
     }
 
-    error_code connect_one(const tcp::endpoint& ep, milliseconds timeout = default_timeout()) {
+    std::error_code connect_one(const tcp::endpoint& ep, long long timeoutMillis = default_timeout()) {
         auto ex = socket_.get_executor();
+        const auto timeout = clamp_to_milliseconds(timeoutMillis);
         return with_deadline(ex, timeout,
             [&](auto completion){ socket_.async_connect(ep, completion); },
             [&]{ socket_.cancel(); }
         );
+    }
+
+    static milliseconds clamp_to_milliseconds(long long timeoutMillis) {
+        if (timeoutMillis <= 0) {
+            return milliseconds{0};
+        }
+        return milliseconds{timeoutMillis};
     }
 
     std::shared_ptr<asio::io_context> io_;

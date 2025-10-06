@@ -12,10 +12,10 @@
 namespace libera::etherdream::config {
 
 // Networking -----------------------------------------------------------------
-constexpr unsigned short ETHERDREAM_DAC_PORT = 7765;
+constexpr unsigned short ETHERDREAM_DAC_PORT_DEFAULT = 7765;
+constexpr std::uint16_t ETHERDREAM_TARGET_POINT_RATE = 30000;
 
 // Streaming behaviour ---------------------------------------------------------
-constexpr std::chrono::milliseconds ETHERDREAM_MAX_LATENCY{50};
 constexpr std::chrono::milliseconds ETHERDREAM_TICK_INTERVAL{33};
 constexpr std::size_t ETHERDREAM_BUFFER_CAPACITY = 16384;   // device FIFO depth in points
 constexpr std::size_t ETHERDREAM_MIN_PACKET_POINTS = 1000;  // minimum batch we want to ship

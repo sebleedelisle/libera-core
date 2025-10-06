@@ -8,6 +8,9 @@ using namespace libera;
 
 int main() {
 
+
+    libera::net::set_default_timeout_ms(5000);
+
     etherdream::EtherDreamDevice etherdream;
 
     // 3) Install your point-generation callback.
@@ -52,7 +55,7 @@ int main() {
     //    Replace the IP below with your device address when ready.
     //    On macOS you may need to allow the app in firewall prompts.
     
-   if (auto r = etherdream.connect("127.0.0.1"); !r) {
+   if (auto r = etherdream.connect("192.168.1.76"); !r) {
         std::cerr << "Connect failed: " << r.error().message() << "\n";
     } else { 
         // 5) Start the device worker thread (calls EtherDreamDevice::run()).

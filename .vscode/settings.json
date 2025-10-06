@@ -65,7 +65,8 @@
         "list": "cpp",
         "source_location": "cpp",
         "span": "cpp",
-        "type_traits": "cpp"
+        "type_traits": "cpp",
+        "chrono": "cpp"
     }, 
       "C_Cpp.default.cppStandard": "c++17",
       "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
