@@ -93,7 +93,7 @@ private:
     sendCommand(char command);
 
     expected<DacAck>
-    sendBegin(std::uint32_t pointRate);
+    sendBeginCommand(std::uint32_t pointRate);
 
     /// Issue the point-rate command ('q') and return the associated ACK.
     expected<DacAck>
@@ -111,13 +111,28 @@ private:
                                                           std::size_t minPacketPoints);
 
     void handleFailure(std::string_view where,
-                       const std::error_code& ec,
-                       bool& failureEncountered);
+                       const std::error_code& ec);
+
+    void updatePlaybackRequirements(const EtherDreamStatus& status, bool commandAcked);
+    core::PointFillRequest getFillRequest();
+    void sendPoints();
+    void sendClear();
+    void sendPrepare();
+    void sendBegin();
+    void handlePostIteration(bool sentFrame);
+    void ensureTargetPointRate();
 
     EtherDreamStatus lastKnownStatus{};
     libera::net::TcpClient tcpClient;
     std::optional<libera::net::asio::ip::address> rememberedAddress{};
     bool rateChangePending = false;
+    bool clearRequired = false;
+    bool prepareRequired = false;
+    bool beginRequired = false;
+    std::size_t pendingDesiredPoints = 0;
+    std::size_t pendingBufferFree = 0;
+    std::size_t idlePollCounter = 0;
+    bool failureEncountered = false;
 };
 
 } // namespace libera::etherdream

@@ -65,8 +65,8 @@ public:
     /**
      * @brief Construct the controller and reserve internal buffers.
      *
-     * Currently reserves ~30k points for both buffers, which is more than most
-     * hardware FIFOs. This avoids most reallocations in practice.
+     * Currently reserves ~30k points for the transmission buffer, which is
+     * more than most hardware FIFOs. This avoids most reallocations in practice.
      */
     LaserDeviceBase();
     virtual ~LaserDeviceBase();
@@ -123,9 +123,6 @@ protected:
 
     /// Main buffer of points pending transmission to the DAC.
     std::vector<LaserPoint> pointsToSend;
-
-    /// Scratch buffer for a single requestPoints() batch (reused each call).
-    std::vector<LaserPoint> newPoints;
 
 
 };

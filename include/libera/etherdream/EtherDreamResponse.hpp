@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace libera::etherdream {
 
@@ -30,6 +31,11 @@ struct EtherDreamStatus {
     std::uint16_t bufferFullness = 0;
     std::uint32_t pointRate = 0;
     std::uint32_t pointCount = 0;
+
+    static const char* toString(LightEngineState state);
+    static const char* toString(PlaybackState state);
+    std::string describe() const;
+    static std::string toHexLine(const std::uint8_t* data, std::size_t size);
 };
 
 struct EtherDreamResponse {

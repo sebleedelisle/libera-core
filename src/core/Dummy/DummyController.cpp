@@ -23,11 +23,9 @@ void DummyController::run() {
         req.minimumPointsRequired = 1000;
         req.estimatedFirstPointRenderTime = steady_clock::now();
 
-        bool ok = requestPoints(req);
-        if (ok) {
-            std::cout << "Pulled " << newPoints.size()
-                      << " new points. Total buffered: "
-                      << pointsToSend.size() << std::endl;
+        if (requestPoints(req)) {
+            std::cout << "Pulled " << pointsToSend.size()
+                      << " new points." << std::endl;
         }
 
         std::this_thread::sleep_for(interval);

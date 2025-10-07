@@ -8,7 +8,6 @@ LaserDeviceBase::LaserDeviceBase() {
     // without reallocating in the real-time path.
     // 30,000 points is intentionally generous — safe for most DACs.
     pointsToSend.reserve(30000);
-    newPoints.reserve(30000);
 }
 
 LaserDeviceBase::~LaserDeviceBase() {
@@ -26,25 +25,20 @@ bool LaserDeviceBase::requestPoints(const PointFillRequest &request) {
         return false;
     }
 
-    // Reset scratch buffer (capacity retained).
-    newPoints.clear();
+    // Reset transmission buffer (capacity retained).
+    pointsToSend.clear();
 
     // Ask user-supplied callback to append new points.
-    requestPointsCallback(request, newPoints);
+    requestPointsCallback(request, pointsToSend);
 
     // Debug-only: enforce the contract that callback produced
     // at least the requested minimum number of points.
-    assert(newPoints.size() >= request.minimumPointsRequired &&
+    assert(pointsToSend.size() >= request.minimumPointsRequired &&
            "Callback did not provide the minimum required number of points.");
     if (request.maximumPointsRequired > 0) {
-        assert(newPoints.size() <= request.maximumPointsRequired &&
+        assert(pointsToSend.size() <= request.maximumPointsRequired &&
                "Callback produced more points than allowed by maximumPointsRequired.");
     }
-
-    // Append the newly generated batch to the main buffer.
-    // Note: we intentionally keep `newPoints` separate to easily inspect how
-    // many were produced in a single requestPoints() call and to avoid allocations.
-    pointsToSend.insert(pointsToSend.end(), newPoints.begin(), newPoints.end());
 
     return true;
 }
