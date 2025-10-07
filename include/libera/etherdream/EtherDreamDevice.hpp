@@ -23,7 +23,8 @@
 #include "libera/net/NetConfig.hpp"
 #include "libera/net/TcpClient.hpp"
 #include "libera/etherdream/EtherDreamConfig.hpp"
-#include "libera/etherdream/etherdream_schema.hpp"
+#include "libera/etherdream/EtherDreamCommand.hpp"
+#include "libera/etherdream/EtherDreamResponse.hpp"
 #include <memory>
 #include <string_view>
 #include <optional>
@@ -79,7 +80,7 @@ protected:
 
 private:
     struct DacAck {
-        schema::DacStatus status{};
+        EtherDreamStatus status{};
         char command = 0;
     };
 
@@ -91,18 +92,21 @@ private:
     expected<DacAck>
     sendCommand(char command);
 
+    expected<DacAck>
+    sendBegin(std::uint32_t pointRate);
+
     /// Issue the point-rate command ('q') and return the associated ACK.
     expected<DacAck>
     setPointRate(std::uint16_t rate);
 
-    static std::size_t calculateMinimumPoints(const schema::DacStatus& status,
+    static std::size_t calculateMinimumPoints(const EtherDreamStatus& status,
                                               long long maxLatencyMillis);
 
     static std::size_t clampDesiredPoints(std::size_t minimumPointsNeeded,
                                           std::size_t minPacketPoints,
                                           std::size_t bufferFree);
 
-    static std::chrono::milliseconds computeSleepDuration(const schema::DacStatus& status,
+    static std::chrono::milliseconds computeSleepDuration(const EtherDreamStatus& status,
                                                           std::size_t bufferCapacity,
                                                           std::size_t minPacketPoints);
 
@@ -110,7 +114,7 @@ private:
                        const std::error_code& ec,
                        bool& failureEncountered);
 
-    schema::DacStatus lastKnownStatus{};
+    EtherDreamStatus lastKnownStatus{};
     libera::net::TcpClient tcpClient;
     std::optional<libera::net::asio::ip::address> rememberedAddress{};
     bool rateChangePending = false;

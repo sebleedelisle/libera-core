@@ -14,9 +14,9 @@ This repository implements reusable building blocks for streaming laser control 
 - `waitForResponse()` blocks for the matching EtherDream ACK and returns the parsed status payload, so every command path picks up fresh device telemetry or surfaces transport errors immediately.
 
 ## Serialization Contract
-- `EtherDreamProtocol` encapsulates the encoding rules for converting `LaserPoint` values into EtherDream frames. `serializePoints()` returns reusable thread-local storage to avoid heap churn on the hot path.
-- Coordinate and colour scaling obey the EtherDream DAC v2 specification (section 2.2 "Point Format"): coordinates map to signed 16-bit integers (`ETHERDREAM_COORD_SCALE`), while colour/intensity channels map to unsigned 16-bit (`ETHERDREAM_CHANNEL_SCALE`).
-- The protocol helpers keep the worker loop focused solely on scheduling and IO; any other component that needs to inspect packet sizes can include `EtherDreamProtocol.hpp` and rely on the shared constants (`ETHERDREAM_HEADER_SIZE`, `ETHERDREAM_POINT_SIZE`, etc.).
+- `EtherDreamCommand` constructs packets in the EtherDream wire format using a simple little-endian `ByteBuffer`. The streaming loop asks it to build `d`, `b`, and `q` messages as required.
+- Coordinates and colour channels are scaled to the documented 16-bit ranges before serialisation, so the DAC receives full-scale values regardless of the user-space units.
+- `EtherDreamResponse` decodes ACK frames and surfaces the parsed status fields, keeping the worker loop focused solely on scheduling and IO.
 - Time-sensitive behaviour is tuned through `LaserDeviceBase::setLatency()`, `ETHERDREAM_MIN_PACKET_POINTS`, and the sleep bounds (`ETHERDREAM_MIN_SLEEP` / `ETHERDREAM_MAX_SLEEP`), with the stream loop calculating how many samples to queue based on the last ACK’s buffer fullness and point rate.
 
 ## Coding Conventions
