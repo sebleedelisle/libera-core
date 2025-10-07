@@ -96,7 +96,7 @@ private:
     setPointRate(std::uint16_t rate);
 
     static std::size_t calculateMinimumPoints(const schema::DacStatus& status,
-                                              std::chrono::milliseconds maxLatency);
+                                              long long maxLatencyMillis);
 
     static std::size_t clampDesiredPoints(std::size_t minimumPointsNeeded,
                                           std::size_t minPacketPoints,
@@ -113,6 +113,7 @@ private:
     schema::DacStatus lastKnownStatus{};
     libera::net::TcpClient tcpClient;
     std::optional<libera::net::asio::ip::address> rememberedAddress{};
+    bool rateChangePending = false;
 };
 
 } // namespace libera::etherdream

@@ -34,6 +34,7 @@ struct PacketView {
 // Serialize a batch of LaserPoint values into EtherDream format. Returns a
 // PacketView whose span points at thread-local scratch storage that remains
 // valid until the next serializePoints() call on the same thread.
-[[nodiscard]] PacketView serializePoints(const std::vector<libera::core::LaserPoint>& points);
+[[nodiscard]] PacketView serializePoints(const std::vector<libera::core::LaserPoint>& points,
+                                        bool rateChangeRequested);
 
 } // namespace libera::etherdream::protocol

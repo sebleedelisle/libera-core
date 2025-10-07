@@ -5,6 +5,7 @@
       "name": "debug",
       "displayName": "Debug (no sanitiser)",
       "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "SANITIZE": "none"
@@ -14,18 +15,31 @@
       "name": "asan",
       "displayName": "Debug (Address/UB Sanitizer)",
       "inherits": "debug",
+      "binaryDir": "${sourceDir}/build/asan",
       "cacheVariables": { "SANITIZE": "address" }
     },
     {
       "name": "tsan",
       "displayName": "Debug (Thread Sanitizer)",
       "inherits": "debug",
+      "binaryDir": "${sourceDir}/build/tsan",
       "cacheVariables": { "SANITIZE": "thread" }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SANITIZE": "none"
+      }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
     { "name": "asan",  "configurePreset": "asan"  },
-    { "name": "tsan",  "configurePreset": "tsan"  }
+    { "name": "tsan",  "configurePreset": "tsan"  },
+    { "name": "release", "configurePreset": "release" }
   ]
 }

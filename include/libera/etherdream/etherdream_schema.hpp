@@ -70,12 +70,12 @@ inline const auto dacStatusFields = std::make_tuple(
     lsch::field<&DacStatus::lightEngineState>("lightEngineState", lsch::BeU8{} , LE_Range{}),
     lsch::field<&DacStatus::playbackState   >("playbackState"  , lsch::BeU8{} , PB_Range{}),
     lsch::field<&DacStatus::source          >("source"         , lsch::BeU8{} , SRC_Range{}),
-    lsch::field<&DacStatus::lightEngineFlags>("lightEngineFlags", lsch::BeU16{}),
-    lsch::field<&DacStatus::playbackFlags   >("playbackFlags"  , lsch::BeU16{}),
-    lsch::field<&DacStatus::sourceFlags     >("sourceFlags"    , lsch::BeU16{}),
-    lsch::field<&DacStatus::bufferFullness  >("bufferFullness" , lsch::BeU16{}),
-    lsch::field<&DacStatus::pointRate       >("pointRate"      , lsch::BeU32{}),
-    lsch::field<&DacStatus::pointCount      >("pointCount"     , lsch::BeU32{})
+    lsch::field<&DacStatus::lightEngineFlags>("lightEngineFlags", lsch::LeU16{}),
+    lsch::field<&DacStatus::playbackFlags   >("playbackFlags"  , lsch::LeU16{}),
+    lsch::field<&DacStatus::sourceFlags     >("sourceFlags"    , lsch::LeU16{}),
+    lsch::field<&DacStatus::bufferFullness  >("bufferFullness" , lsch::LeU16{}),
+    lsch::field<&DacStatus::pointRate       >("pointRate"      , lsch::LeU32{}),
+    lsch::field<&DacStatus::pointCount      >("pointCount"     , lsch::LeU32{})
 );
 
 // --- The schema object ---

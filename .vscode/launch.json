@@ -15,7 +15,7 @@
                 "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
             },
             "stopOnEntry": false,
-            "preLaunchTask": "CMake: build"
+            "preLaunchTask": "CMake Build (debug preset)"
         },
         {
             "name": "Run libera-core (TSan)",
@@ -28,10 +28,21 @@
                 "TSAN_OPTIONS": "halt_on_error=1:history_size=7:report_signal_unsafe=1"
             },
             "stopOnEntry": false,
-            "preLaunchTask": "CMake: build",
+            "preLaunchTask": "CMake Build (debug preset)",
             "initCommands": [
                 "br set -E c++"
             ]
+        }
+        ,
+        {
+            "name": "Run libera-core (Release)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/release/libera-main",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": false,
+            "preLaunchTask": "CMake Build (release preset)"
         }
     ]
 }

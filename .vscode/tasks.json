@@ -2,14 +2,37 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "CMake Build",
+      "label": "CMake Build (debug preset)",
       "type": "shell",
-      "command": "cmake --build build",
+      "command": "cmake --build --preset debug",
       "group": {
         "kind": "build",
         "isDefault": true
       },
-      "problemMatcher": ["$gcc"]
+      "problemMatcher": ["$gcc"],
+      "detail": "Builds using the 'debug' preset defined in CMakePresets.json"
+    },
+    {
+      "label": "CMake Configure (debug preset)",
+      "type": "shell",
+      "command": "cmake --preset debug",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake Configure (release preset)",
+      "type": "shell",
+      "command": "cmake --preset release",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake Build (release preset)",
+      "type": "shell",
+      "command": "cmake --build --preset release",
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "detail": "Builds using the 'release' preset defined in CMakePresets.json"
     }
   ]
 }

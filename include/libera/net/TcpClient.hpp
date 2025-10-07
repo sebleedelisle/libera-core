@@ -87,26 +87,40 @@ public:
         return last;
     }
 
-    std::error_code read_exact(void* buf, std::size_t n, long long timeoutMillis = default_timeout()) {
+    std::error_code read_exact(void* buf, std::size_t n, long long timeoutMillis = default_timeout(),
+                               std::size_t* bytesTransferredOut = nullptr) {
         auto ex = socket_.get_executor();
         const auto timeout = clamp_to_milliseconds(timeoutMillis);
-        return with_deadline(ex, timeout,
+        std::size_t bytesTransferred = 0;
+        auto ec = with_deadline(ex, timeout,
             [&](auto completion){
-                asio::async_read(socket_, asio::buffer(buf, n), completion);
+                asio::async_read(socket_, asio::buffer(buf, n),
+                    [&, completion](const std::error_code& op_ec, std::size_t transferred){
+                        bytesTransferred = transferred;
+                        completion(op_ec);
+                    });
             },
             [&]{ socket_.cancel(); }
         );
+        if (bytesTransferredOut) {
+            *bytesTransferredOut = bytesTransferred;
+        }
+        return ec;
     }
 
     std::error_code write_all(const void* buf, std::size_t n, long long timeoutMillis = default_timeout()) {
         auto ex = socket_.get_executor();
         const auto timeout = clamp_to_milliseconds(timeoutMillis);
-        return with_deadline(ex, timeout,
+        auto ec = with_deadline(ex, timeout,
             [&](auto completion){
-                asio::async_write(socket_, asio::buffer(buf, n), completion);
+                asio::async_write(socket_, asio::buffer(buf, n),
+                    [completion](const std::error_code& op_ec, std::size_t){
+                        completion(op_ec);
+                    });
             },
             [&]{ socket_.cancel(); }
         );
+        return ec;
     }
 
     void setLowLatency() {

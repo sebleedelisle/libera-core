@@ -121,6 +121,40 @@ struct BeU32 {
     }
 };
 
+struct LeU16 {
+    expected<uint16_t, DecodeError>
+    read(ByteView& s, const char* where) const {
+        if (s.size() < 2) return unexpected<DecodeError>({where, "need 2 bytes"});
+        uint16_t v = static_cast<uint16_t>(static_cast<uint8_t>(s[0]))
+                   | (static_cast<uint16_t>(static_cast<uint8_t>(s[1])) << 8);
+        s = s.subspan(2);
+        return v;
+    }
+    void write(uint16_t v, std::vector<std::byte>& out) const {
+        out.push_back(std::byte(v & 0xFF));
+        out.push_back(std::byte((v >> 8) & 0xFF));
+    }
+};
+
+struct LeU32 {
+    expected<uint32_t, DecodeError>
+    read(ByteView& s, const char* where) const {
+        if (s.size() < 4) return unexpected<DecodeError>({where, "need 4 bytes"});
+        uint32_t v = static_cast<uint32_t>(static_cast<uint8_t>(s[0]))
+                   | (static_cast<uint32_t>(static_cast<uint8_t>(s[1])) << 8)
+                   | (static_cast<uint32_t>(static_cast<uint8_t>(s[2])) << 16)
+                   | (static_cast<uint32_t>(static_cast<uint8_t>(s[3])) << 24);
+        s = s.subspan(4);
+        return v;
+    }
+    void write(uint32_t v, std::vector<std::byte>& out) const {
+        out.push_back(std::byte(v & 0xFF));
+        out.push_back(std::byte((v >> 8) & 0xFF));
+        out.push_back(std::byte((v >> 16) & 0xFF));
+        out.push_back(std::byte((v >> 24) & 0xFF));
+    }
+};
+
 // Fixed-length ASCII (printable or zero padding). Maps to std::array<char,N>.
 template<std::size_t N>
 struct FixedAscii {

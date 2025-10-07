@@ -76,7 +76,7 @@ std::error_code with_deadline(
         {
             std::lock_guard<std::mutex> lk(st->m);
             if (st->done) return;           // op raced and already finished
-            st->ec = asio::error::operation_aborted;
+            st->ec = asio::error::timed_out;
             st->done = true;
         }
         st->cv.notify_one();

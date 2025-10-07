@@ -69,5 +69,14 @@
         "chrono": "cpp"
     }, 
       "C_Cpp.default.cppStandard": "c++17",
-      "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
+      "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+      "cmake.useCMakePresets": "always",
+      "cmake.configureOnOpen": false,
+      "cmake.debugConfig": {
+          "type": "lldb",
+          "request": "launch",
+          "program": "${command:cmake.launchTargetPath}",
+          "cwd": "${workspaceFolder}",
+          "preLaunchTask": "CMake Build (debug preset)"
+      }
 }

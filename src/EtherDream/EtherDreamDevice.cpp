@@ -133,6 +133,15 @@ void EtherDreamDevice::run() {
         lastKnownStatus = prepareAck->status;
     }
 
+    if (lastKnownStatus.pointRate != config::ETHERDREAM_TARGET_POINT_RATE) {
+        if (auto rateAck = setPointRate(config::ETHERDREAM_TARGET_POINT_RATE); !rateAck) {
+            handleFailure("point rate command", rateAck.error(), failureEncountered);
+            return;
+        } else {
+            lastKnownStatus = rateAck->status;
+        }
+    }
+
     // Main streaming loop.
     while (running) {
         const std::size_t bufferFullness = lastKnownStatus.bufferFullness;
@@ -142,7 +151,7 @@ void EtherDreamDevice::run() {
 
         const auto latencyBudget = std::chrono::milliseconds{latencyMillis};
         const std::size_t minimumPointsNeeded =
-            calculateMinimumPoints(lastKnownStatus, latencyBudget);
+            calculateMinimumPoints(lastKnownStatus, latencyMillis);
         const std::size_t desiredPoints =
             clampDesiredPoints(minimumPointsNeeded, minPacketPoints, bufferFree);
 
@@ -169,11 +178,16 @@ void EtherDreamDevice::run() {
                 pointsToSend.resize(bufferFree);
             }
 
-            const auto packet = protocol::serializePoints(pointsToSend);
+            const bool injectRateChange = rateChangePending;
+            const auto packet = protocol::serializePoints(pointsToSend, injectRateChange);
             if (packet.empty()) {
                 handleFailure("packet serialization", std::make_error_code(std::errc::invalid_argument), failureEncountered);
                 break;
             }
+
+            std::cerr << "[EtherDreamDevice] sending 'd' packet: "
+                      << pointsToSend.size() << " points, "
+                      << packet.size << " bytes\n";
 
             if (auto ec = tcpClient.write_all(packet.data, packet.size, latencyMillis); ec) {
                 handleFailure("stream write", ec, failureEncountered);
@@ -185,6 +199,9 @@ void EtherDreamDevice::run() {
                 break;
             } else {
                 lastKnownStatus = dataAck->status;
+                if (injectRateChange) {
+                    rateChangePending = false;
+                }
             }
 
             pointsToSend.clear();
@@ -198,14 +215,6 @@ void EtherDreamDevice::run() {
                 break;
             } else {
                 lastKnownStatus = beginAck->status;
-                if (lastKnownStatus.pointRate != config::ETHERDREAM_TARGET_POINT_RATE) {
-                    if (auto rateAck = setPointRate(config::ETHERDREAM_TARGET_POINT_RATE); !rateAck) {
-                        handleFailure("point rate command", rateAck.error(), failureEncountered);
-                        break;
-                    } else {
-                        lastKnownStatus = rateAck->status;
-                    }
-                }
             }
         }
 
@@ -237,12 +246,18 @@ void EtherDreamDevice::run() {
 expected<EtherDreamDevice::DacAck>
 EtherDreamDevice::waitForResponse(char command)
 {
+    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
+    const auto timeoutMillis = std::max<long long>(currentLatency, libera::net::default_timeout());
+
     std::array<std::byte, 22> raw{};
     if (!tcpClient.is_open()) {
         return unexpected(make_error_code(std::errc::not_connected));
     }
 
-    if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), latencyMillis); ec) {
+    std::size_t bytesTransferred = 0;
+    if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeoutMillis, &bytesTransferred); ec) {
+        std::cerr << "[EtherDreamDevice] read_exact failed after " << timeoutMillis
+                  << "ms, transferred " << bytesTransferred << " bytes\n";
         return unexpected(std::error_code(ec.value(), ec.category()));
     }
 
@@ -298,8 +313,10 @@ EtherDreamDevice::waitForResponse(char command)
 
 expected<EtherDreamDevice::DacAck>
 EtherDreamDevice::sendCommand(char command) {
+    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
+    const auto timeoutMillis = std::max<long long>(currentLatency, libera::net::default_timeout());
     const uint8_t cmdByte = static_cast<uint8_t>(command);
-    if (auto ec = tcpClient.write_all(&cmdByte, 1, latencyMillis); ec) {
+    if (auto ec = tcpClient.write_all(&cmdByte, 1, timeoutMillis); ec) {
         return unexpected(ec);
     }
     return waitForResponse(command);
@@ -307,36 +324,41 @@ EtherDreamDevice::sendCommand(char command) {
 
 expected<EtherDreamDevice::DacAck>
 EtherDreamDevice::setPointRate(std::uint16_t rate) {
+    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
+    const auto timeoutMillis = std::max<long long>(currentLatency, libera::net::default_timeout());
     std::array<uint8_t, 3> payload{};
     payload[0] = static_cast<uint8_t>('q');
     payload[1] = static_cast<uint8_t>((rate >> 8) & 0xFFu);
     payload[2] = static_cast<uint8_t>(rate & 0xFFu);
 
-    if (auto ec = tcpClient.write_all(payload.data(), payload.size(), latencyMillis); ec) {
-        if (ec == asio::error::operation_aborted) {
+    if (auto ec = tcpClient.write_all(payload.data(), payload.size(), timeoutMillis); ec) {
+        if (ec == asio::error::timed_out) {
             std::cerr << "[EtherDreamDevice] point rate write timed out after "
-                      << latencyMillis << "ms\n";
+                      << timeoutMillis << "ms\n";
         }
         return unexpected(ec);
     }
 
     auto ack = waitForResponse('q');
-    if (!ack && ack.error() == asio::error::operation_aborted) {
+    if (!ack && ack.error() == asio::error::timed_out) {
         std::cerr << "[EtherDreamDevice] point rate ACK timed out after "
-                  << latencyMillis << "ms\n";
+                  << timeoutMillis << "ms\n";
+    }
+    if (ack) {
+        rateChangePending = true;
     }
     return ack;
 }
 
 std::size_t
 EtherDreamDevice::calculateMinimumPoints(const schema::DacStatus& status,
-                                         std::chrono::milliseconds maxLatency) {
-    if (status.pointRate == 0 || maxLatency.count() <= 0) {
+                                         long long maxLatencyMillis) {
+    if (status.pointRate == 0 || maxLatencyMillis <= 0) {
         return 0;
     }
 
     const double requiredPoints =
-        (static_cast<double>(status.pointRate) * static_cast<double>(maxLatency.count())) / 1000.0;
+        (static_cast<double>(status.pointRate) * static_cast<double>(maxLatencyMillis)) / 1000.0;
     if (requiredPoints <= static_cast<double>(status.bufferFullness)) {
         return 0;
     }

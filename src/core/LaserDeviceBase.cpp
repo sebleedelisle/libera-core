@@ -59,11 +59,9 @@ void LaserDeviceBase::start() {
 }
 
 void LaserDeviceBase::stop() {
-    if (running) {
-        running = false;
-        if (worker.joinable()) {
-            worker.join();
-        }
+    running = false;
+    if (worker.joinable()) {
+        worker.join();
     }
 }
 

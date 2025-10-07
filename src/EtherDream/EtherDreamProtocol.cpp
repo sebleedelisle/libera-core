@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <type_traits>
 
 namespace {
 
@@ -41,16 +42,35 @@ inline std::uint16_t encodeChannel(float value) noexcept {
     return static_cast<std::uint16_t>(scaled);
 }
 
-inline void write_be16(std::byte*& dst, std::uint16_t value) noexcept {
-    *dst++ = std::byte((value >> 8) & 0xFFu);
+inline void write_u8(std::byte*& dst, std::byte value) noexcept {
+    *dst++ = value;
+}
+
+inline void write_u8(std::byte*& dst, unsigned char value) noexcept {
+    write_u8(dst, std::byte{value});
+}
+
+inline void write_u8(std::byte*& dst, char value) noexcept {
+    write_u8(dst, static_cast<unsigned char>(value));
+}
+
+inline void write_le16(std::byte*& dst, std::uint16_t value) noexcept {
     *dst++ = std::byte(value & 0xFFu);
+    *dst++ = std::byte((value >> 8) & 0xFFu);
+}
+
+template <typename Integral,
+          typename = std::enable_if_t<(std::is_integral<Integral>::value && sizeof(Integral) > 2)>>
+inline void write_le16(std::byte*& dst, Integral value) noexcept {
+    write_le16(dst, static_cast<std::uint16_t>(value));
 }
 
 } // namespace
 
 namespace libera::etherdream::protocol {
 
-PacketView serializePoints(const std::vector<libera::core::LaserPoint>& points) {
+PacketView serializePoints(const std::vector<libera::core::LaserPoint>& points,
+                          bool rateChangeRequested) {
     auto& packet = packetBuffer();
 
     if (points.empty()) {
@@ -61,21 +81,26 @@ PacketView serializePoints(const std::vector<libera::core::LaserPoint>& points) 
     packet.resize(ETHERDREAM_HEADER_SIZE + points.size() * ETHERDREAM_POINT_SIZE);
 
     auto* out = packet.data();
-    *out++ = std::byte{'d'}; // EtherDream "data" command (Per Ether Dream DAC v2 spec section 2.1)
+    write_u8(out, 'd'); // EtherDream "data" command (Per Ether Dream DAC v2 spec section 2.1)
 
-    write_be16(out, static_cast<std::uint16_t>(points.size()));
-    write_be16(out, 0); // flags currently unused
+    write_le16(out, points.size());
+    write_le16(out, 0); // flags currently unused (little-endian per spec)
+
+    bool rateFlagPending = rateChangeRequested;
 
     for (const auto& pt : points) {
-        write_be16(out, 0); // control bits reserved
-        write_be16(out, encodeCoordinate(pt.x));
-        write_be16(out, encodeCoordinate(pt.y));
-        write_be16(out, encodeChannel(pt.r));
-        write_be16(out, encodeChannel(pt.g));
-        write_be16(out, encodeChannel(pt.b));
-        write_be16(out, encodeChannel(pt.i));
-        write_be16(out, encodeChannel(pt.u1));
-        write_be16(out, encodeChannel(pt.u2));
+        const std::uint16_t control = rateFlagPending ? 0x8000u : 0u;
+        rateFlagPending = false;
+
+        write_le16(out, control);
+        write_le16(out, encodeCoordinate(pt.x));
+        write_le16(out, encodeCoordinate(pt.y));
+        write_le16(out, encodeChannel(pt.r));
+        write_le16(out, encodeChannel(pt.g));
+        write_le16(out, encodeChannel(pt.b));
+        write_le16(out, encodeChannel(pt.i));
+        write_le16(out, encodeChannel(pt.u1));
+        write_le16(out, encodeChannel(pt.u2));
     }
 
     return PacketView{packet.data(), packet.size()};
