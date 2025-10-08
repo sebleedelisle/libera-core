@@ -99,14 +99,14 @@ EtherDreamDevice::waitForResponse(char command)
     if (!running) {
         return unexpected(std::make_error_code(std::errc::operation_canceled));
     }
-
-    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
-    const auto timeoutMillis = std::max<long long>(currentLatency, libera::net::default_timeout());
-
-    std::array<std::uint8_t, 22> raw{};
     if (!tcpClient.is_open()) {
         return unexpected(make_error_code(std::errc::not_connected));
     }
+
+    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
+    const auto timeoutMillis = currentLatency; // std::max<long long>(currentLatency, libera::net::default_timeout());
+
+    std::array<std::uint8_t, 22> raw{};
 
     std::size_t bytesTransferred = 0;
     if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeoutMillis, &bytesTransferred); ec) {
@@ -277,6 +277,7 @@ void EtherDreamDevice::run() {
     pendingDesiredPoints = 0;
     pendingBufferFree = 0;
 
+
     if (!tcpClient.is_open()) {
         std::cerr << "[EtherDreamDevice] run() called without an active connection.\n";
         running = false;
@@ -300,6 +301,8 @@ void EtherDreamDevice::run() {
             sendPrepare();
         }
 
+        sleepUntilNextPoints(); 
+
         auto req = getFillRequest();
         if (pendingDesiredPoints > 0) {
             requestPoints(req);
@@ -309,6 +312,8 @@ void EtherDreamDevice::run() {
         if (beginRequired) {
             sendBegin();
         }
+
+        
     }
 
     if (!tcpClient.is_open() || !failureEncountered) {
