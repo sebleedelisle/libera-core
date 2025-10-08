@@ -5,6 +5,8 @@
 #include <condition_variable>
 #include <mutex>
 #include <memory>
+#include <iostream>
+#include <iostream>
 
 /**
  * with_deadline
@@ -39,6 +41,7 @@ std::error_code with_deadline(
     StartAsync start_async,
     Cancel cancel)
 {
+    std::cout << "[with_deadline] start timeout=" << timeout.count() << "ms\n";
     struct State {
         std::mutex m;
         std::condition_variable cv;
@@ -66,20 +69,27 @@ std::error_code with_deadline(
 
     // Arm the deadline
     timer->expires_after(timeout);
-    timer->async_wait([st, cancel, timer](const std::error_code& tec){
+    timer->async_wait([st, cancel, timer, timeout](const std::error_code& tec){
         if (tec == asio::error::operation_aborted) {
             // Cancelled because op finished — do nothing.
             return;
         }
-        // Timer really expired first → cancel the op and signal completion
-        cancel();
+        bool notify = false;
         {
             std::lock_guard<std::mutex> lk(st->m);
-            if (st->done) return;           // op raced and already finished
+            if (st->done) {
+                return; // operation already completed; no need to cancel
+            }
             st->ec = asio::error::timed_out;
             st->done = true;
+            notify = true;
         }
-        st->cv.notify_one();
+        if (notify) {
+            std::cout << "[with_deadline] timeout fired after "
+                      << timeout.count() << "ms\n";
+            cancel();
+            st->cv.notify_one();
+        }
     });
 
     // Wait until either branch completes

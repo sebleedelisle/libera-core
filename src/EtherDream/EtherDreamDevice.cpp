@@ -25,6 +25,7 @@ namespace libera::etherdream {
 
 using libera::expected;
 using libera::unexpected;
+
 namespace ip = libera::net::asio::ip;
 namespace asio = libera::net::asio;
 
@@ -78,6 +79,7 @@ EtherDreamDevice::connect(const std::string& addressstring, unsigned short port)
 
 
 void EtherDreamDevice::close() {
+    std::cout << "[EtherDreamDevice] close()\n"; 
     // Make this idempotent and keep internal state consistent.
     if (!tcpClient.is_open()) {
         rememberedAddress.reset();
@@ -93,9 +95,64 @@ bool EtherDreamDevice::isConnected() const {
     return tcpClient.is_open();
 }
 
+
+
+void EtherDreamDevice::run() {
+
+    failureEncountered = false;
+    //idlePollCounter = 0;
+    //pendingDesiredPoints = 0;
+    //pendingBufferFree = 0;
+
+
+    if (!tcpClient.is_open()) {
+        std::cerr << "[EtherDreamDevice] run() called without an active connection.\n";
+        running = false;
+        return;
+    }
+
+    auto initialAck = waitForResponse('?');
+    if (!initialAck) {
+        if (auto pingAck = sendCommand('?'); !pingAck) {
+            handleNetworkFailure("initial ping", pingAck.error());
+            return;
+        }
+    }
+ 
+    while (running) {
+        if (clearRequired) {
+            sendClear();
+        }
+
+        if (prepareRequired) {
+            sendPrepare();
+        }
+
+        sleepUntilNextPoints(); 
+
+        auto req = getFillRequest();
+        if (req.needsPoints(config::ETHERDREAM_MIN_PACKET_POINTS)) {
+            requestPoints(req);
+            sendPoints();
+        }
+        
+
+        if (beginRequired) {
+            sendBegin();
+        }
+
+        
+    }
+
+    if (!tcpClient.is_open() || !failureEncountered) {
+        return;
+    }
+
+    close();
+}
+
 expected<EtherDreamDevice::DacAck>
-EtherDreamDevice::waitForResponse(char command)
-{
+EtherDreamDevice::waitForResponse(char command) {
     if (!running) {
         return unexpected(std::make_error_code(std::errc::operation_canceled));
     }
@@ -103,15 +160,17 @@ EtherDreamDevice::waitForResponse(char command)
         return unexpected(make_error_code(std::errc::not_connected));
     }
 
-    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
-    const auto timeoutMillis = currentLatency; // std::max<long long>(currentLatency, libera::net::default_timeout());
+    const long long timeoutMillis = latencyMillis; // might wanna change this to a default timeout for connections
 
+    // tiny stack allocation so it's fine, don't need to cache
     std::array<std::uint8_t, 22> raw{};
 
     std::size_t bytesTransferred = 0;
     if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeoutMillis, &bytesTransferred); ec) {
-        std::cerr << "[EtherDream] RX timeout after " << timeoutMillis
-                  << "ms (" << bytesTransferred << " byte(s) received)\n";
+        std::cerr << "[EtherDream] RX error "
+            << ec.value() << ' '
+            << ec.category().name() << " — "
+            << ec.message() << '\n';
         return unexpected(std::error_code(ec.value(), ec.category()));
     }
 
@@ -123,6 +182,8 @@ EtherDreamDevice::waitForResponse(char command)
 
     const bool ackMatched = (response.response == 'a') &&
                             (static_cast<char>(response.command) == command);
+
+    // updates beginRequired, clearRequired, prepareRequired                        
     updatePlaybackRequirements(response.status, ackMatched);
 
     std::cout << "[EtherDream] RX '" << static_cast<char>(response.response)
@@ -141,13 +202,14 @@ EtherDreamDevice::waitForResponse(char command)
 }
 
 expected<EtherDreamDevice::DacAck>
-EtherDreamDevice::sendCommand(char command) {
+EtherDreamDevice :: sendCommand(char command) {
+
     if (!running) {
         return unexpected(std::make_error_code(std::errc::operation_canceled));
     }
 
-    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
-    const auto timeoutMillis = std::max<long long>(currentLatency, libera::net::default_timeout());
+    const long long timeoutMillis = latencyMillis;
+    
     const uint8_t cmdByte = static_cast<uint8_t>(command);
     std::cerr << "[EtherDream] TX '" << command << "' (timeout " << timeoutMillis << "ms)\n";
     if (auto ec = tcpClient.write_all(&cmdByte, 1, timeoutMillis); ec) {
@@ -158,13 +220,13 @@ EtherDreamDevice::sendCommand(char command) {
 
 expected<EtherDreamDevice::DacAck>
 EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
-    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
-    const auto timeoutMillis = std::max<long long>(currentLatency, libera::net::default_timeout());
+
+    const long long timeoutMillis = latencyMillis;
 
     EtherDreamCommand command;
     command.setBeginCommand(pointRate);
 
-    std::cerr << "[EtherDream] TX 'b' (rate=" << pointRate
+    std::cout << "[EtherDream] TX 'b' (rate=" << pointRate
               << ", timeout " << timeoutMillis << "ms)\n";
 
     if (auto ec = tcpClient.write_all(command.data(), command.size(), timeoutMillis); ec) {
@@ -175,18 +237,14 @@ EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
         return unexpected(ec);
     }
 
-    auto ack = waitForResponse('b');
-    if (!ack && ack.error() == asio::error::timed_out) {
-        std::cerr << "[EtherDream] begin ACK timed out after "
-                  << timeoutMillis << "ms\n";
-    }
-    return ack;
+    return waitForResponse('b');
 }
 
 expected<EtherDreamDevice::DacAck>
-EtherDreamDevice::setPointRate(std::uint16_t rate) {
-    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
-    const auto timeoutMillis = std::max<long long>(currentLatency, libera::net::default_timeout());
+EtherDreamDevice::sendPointRate(std::uint16_t rate) {
+    
+    const long long timeoutMillis = latencyMillis;
+
     EtherDreamCommand command;
     command.setPointRateCommand(static_cast<std::uint32_t>(rate));
 
@@ -213,118 +271,66 @@ EtherDreamDevice::setPointRate(std::uint16_t rate) {
 }
 
 std::size_t
-EtherDreamDevice::calculateMinimumPoints(const EtherDreamStatus& status,
-                                         long long maxLatencyMillis) {
-    if (status.pointRate == 0 || maxLatencyMillis <= 0) {
+EtherDreamDevice::calculateMinimumPoints() {
+
+    const auto latency = latencyMillis.load(std::memory_order_relaxed);
+
+
+    if (lastKnownStatus.pointRate == 0 || latency <= 0) {
         return 0;
     }
 
-    const double requiredPoints =
-        (static_cast<double>(status.pointRate) * static_cast<double>(maxLatencyMillis)) / 1000.0;
-    if (requiredPoints <= static_cast<double>(status.bufferFullness)) {
+    const auto bufferFullness = estimateBufferFullness();
+    double requiredPoints = minBuffer + (
+        (static_cast<double>(lastKnownStatus.pointRate) * static_cast<double>(latency)) / 1000.0);
+    if (requiredPoints <= static_cast<double>(bufferFullness)) {
         return 0;
     }
 
-    const double deficit = requiredPoints - static_cast<double>(status.bufferFullness);
+    if(requiredPoints>config::ETHERDREAM_BUFFER_CAPACITY) requiredPoints = config::ETHERDREAM_BUFFER_CAPACITY; 
+
+    const double deficit = requiredPoints - static_cast<double>(bufferFullness);
+
     return static_cast<std::size_t>(std::ceil(deficit));
 }
 
-std::size_t
-EtherDreamDevice::clampDesiredPoints(std::size_t minimumPointsNeeded,
-                                     std::size_t minPacketPoints,
-                                     std::size_t bufferFree) {
-    if (bufferFree == 0) {
-        return 0;
-    }
 
-    const std::size_t baseline = std::max(minimumPointsNeeded, minPacketPoints);
-    return std::min(baseline, bufferFree);
-}
+// long long
+// EtherDreamDevice::computeSleepDurationMS() {
+   
 
-std::chrono::milliseconds
-EtherDreamDevice::computeSleepDuration(const EtherDreamStatus& status,
-                                       std::size_t bufferCapacity,
-                                       std::size_t minPacketPoints) {
-    if (status.pointRate == 0) {
-        return config::ETHERDREAM_MAX_SLEEP;
-    }
+// // ok the logic here is. Get the min point count before we need to send (based on latency)
+//     const auto latency = latencyMillis.load(std::memory_order_relaxed);
+//     if (latency <= 0 || lastKnownStatus.pointRate == 0) {
+//         return 0;
+//     }
 
-    const std::size_t bufferFree = bufferCapacity > status.bufferFullness
-        ? bufferCapacity - status.bufferFullness
-        : 0;
+//     const int minPointsInBuffer = millisToPoints(latency, lastKnownStatus.pointRate);
 
-    if (bufferFree >= minPacketPoints) {
-        return config::ETHERDREAM_MIN_SLEEP;
-    }
+// // figure out how long it will take before we get there
 
-    const std::size_t pointsNeeded = minPacketPoints - bufferFree;
-    const double ms = (static_cast<double>(pointsNeeded) * 1000.0)
-                    / static_cast<double>(std::max<std::uint32_t>(status.pointRate, 1u));
-    auto duration = std::chrono::milliseconds(static_cast<std::int64_t>(std::ceil(ms)));
-    return std::clamp(duration, config::ETHERDREAM_MIN_SLEEP, config::ETHERDREAM_MAX_SLEEP);
-}
+//     const auto fullness = estimateBufferFullness();
+//     const int deficit = static_cast<int>(fullness) - minPointsInBuffer;
+//     const int pointsToWait = std::min<int>(config::ETHERDREAM_MIN_PACKET_POINTS,
+//                                         std::max(deficit, 0));
 
-void EtherDreamDevice::handleFailure(std::string_view where,
+//     // 5 is maximum sleep time that we want
+//     return (long long) std::min<long long> (5, pointsToMillis(pointsToWait, lastKnownStatus.pointRate)); 
+    
+// }
+
+void EtherDreamDevice::handleNetworkFailure(std::string_view where,
                                      const std::error_code& ec) {
     std::cerr << "[EtherDreamDevice] " << where << " failed: " << ec.message() << "\n";
     running = false;
     failureEncountered = true;
 }
-void EtherDreamDevice::run() {
 
-    failureEncountered = false;
-    idlePollCounter = 0;
-    pendingDesiredPoints = 0;
-    pendingBufferFree = 0;
-
-
-    if (!tcpClient.is_open()) {
-        std::cerr << "[EtherDreamDevice] run() called without an active connection.\n";
-        running = false;
-        return;
-    }
-
-    auto initialAck = waitForResponse('?');
-    if (!initialAck) {
-        if (auto pingAck = sendCommand('?'); !pingAck) {
-            handleFailure("initial ping", pingAck.error());
-            return;
-        }
-    }
- 
-    while (running) {
-        if (clearRequired) {
-            sendClear();
-        }
-
-        if (prepareRequired) {
-            sendPrepare();
-        }
-
-        sleepUntilNextPoints(); 
-
-        auto req = getFillRequest();
-        if (pendingDesiredPoints > 0) {
-            requestPoints(req);
-        }
-        sendPoints();
-
-        if (beginRequired) {
-            sendBegin();
-        }
-
-        
-    }
-
-    if (!tcpClient.is_open() || !failureEncountered) {
-        return;
-    }
-
-    close();
-}
 
 void EtherDreamDevice::updatePlaybackRequirements(const EtherDreamStatus& status, bool commandAcked) {
     lastKnownStatus = status;
+    lastReceiveTime = std::chrono::steady_clock::now();
+    
 
     const bool estop = status.lightEngineState == LightEngineState::Estop;
     const bool underflow = (status.playbackFlags & 0x04u) != 0;
@@ -341,94 +347,85 @@ void EtherDreamDevice::updatePlaybackRequirements(const EtherDreamStatus& status
 }
 
 core::PointFillRequest EtherDreamDevice::getFillRequest() {
-    pendingDesiredPoints = 0;
-    pendingBufferFree = 0;
+    // pendingDesiredPoints = 0;
+    // pendingBufferFree = 0;
+    const auto bufferFullness = estimateBufferFullness(); 
 
     const auto bufferCapacity = config::ETHERDREAM_BUFFER_CAPACITY;
-    const std::size_t bufferFullness = static_cast<std::size_t>(lastKnownStatus.bufferFullness);
-    pendingBufferFree = bufferCapacity > bufferFullness
-        ? bufferCapacity - bufferFullness
-        : 0;
-
+    const auto freeSpace = bufferCapacity > bufferFullness ? bufferCapacity - bufferFullness : 0;
+    const auto minimumPointsRequired =
+    std::min<std::size_t>(calculateMinimumPoints(), freeSpace);
+    
+   
     const long long latencyMs = latencyMillis.load(std::memory_order_relaxed);
-    const std::size_t minimumPointsNeeded = calculateMinimumPoints(lastKnownStatus, latencyMs);
-    pendingDesiredPoints = clampDesiredPoints(
-        minimumPointsNeeded,
-        config::ETHERDREAM_MIN_PACKET_POINTS,
-        pendingBufferFree);
 
     core::PointFillRequest req;
-    req.minimumPointsRequired = pendingDesiredPoints;
-    req.maximumPointsRequired = pendingBufferFree;
+    req.maximumPointsRequired = freeSpace;
+    req.minimumPointsRequired = minimumPointsRequired;
     req.estimatedFirstPointRenderTime =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds{latencyMs};
+        std::chrono::steady_clock::now() + std::chrono::milliseconds{latencyMs}; // to do add remaining buffer
+    std::cout << "[EtherDreamDevice Point fill request "<< req.minimumPointsRequired << " " << req.maximumPointsRequired << std::endl; 
 
     pointsToSend.clear();
     return req;
 }
 
 void EtherDreamDevice::sendPoints() {
-    bool sentFrame = false;
-
-    auto resetContext = [&] {
-        pendingDesiredPoints = 0;
-        pendingBufferFree = 0;
-        pointsToSend.clear();
-    };
+    //bool sentFrame = false;
 
     if (clearRequired || prepareRequired) {
-        resetContext();
-        handlePostIteration(false);
+        resetPoints();
+        //handlePostIteration(false);
         return;
     }
 
-    if (pendingDesiredPoints == 0) {
-        resetContext();
-        handlePostIteration(false);
+    if (pointsToSend.size() == 0) {
+        //handlePostIteration(false);
         return;
     }
 
-    if (pointsToSend.size() < pendingDesiredPoints) {
-        handleFailure("point generation", std::make_error_code(std::errc::no_message));
-        resetContext();
-        return;
-    }
+    // if (pointsToSend.size() < pendingDesiredPoints) {
+    //     handleNetworkFailure("point generation", std::make_error_code(std::errc::no_message));
+    //     resetPoints();
+    //     return;
+    // }
 
-    if (pointsToSend.size() > pendingBufferFree) {
-        pointsToSend.resize(pendingBufferFree);
-    }
+    // if (pointsToSend.size() > pendingBufferFree) {
+    //     pointsToSend.resize(pendingBufferFree);
+    // }
 
     const bool injectRateChange = rateChangePending;
     EtherDreamCommand command;
-    const std::size_t pointCount = std::min<std::size_t>(
-        pointsToSend.size(),
-        static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()));
-    command.setDataCommand(static_cast<std::uint16_t>(pointCount));
+    const std::uint16_t pointCount =  static_cast<std::uint16_t>(pointsToSend.size());
+
+    command.setDataCommand(pointCount);
+
     for (std::size_t idx = 0; idx < pointCount; ++idx) {
         const bool setRateBit = injectRateChange && idx == 0;
         command.addPoint(pointsToSend[idx], setRateBit);
     }
 
     if (command.size() == 0) {
-        handleFailure("packet serialization", std::make_error_code(std::errc::invalid_argument));
-        resetContext();
+        handleNetworkFailure("packet serialization", std::make_error_code(std::errc::invalid_argument));
+        resetPoints();
         return;
     }
 
     std::cerr << "[EtherDream] TX data: points=" << pointsToSend.size()
               << " bytes=" << command.size() << "\n";
 
-    const auto currentLatency = latencyMillis.load(std::memory_order_relaxed);
-    if (auto ec = tcpClient.write_all(command.data(), command.size(), currentLatency); ec) {
-        handleFailure("stream write", ec);
-        resetContext();
+    const auto timeoutMS = latencyMillis.load(std::memory_order_relaxed);
+
+    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeoutMS); ec) {
+        handleNetworkFailure("stream write", ec);
+        resetPoints();
         return;
     }
 
     auto dataAck = waitForResponse('d');
     if (!dataAck) {
-        handleFailure("waiting for data ACK", dataAck.error());
-        resetContext();
+        handleNetworkFailure("waiting for data ACK", dataAck.error());
+        resetPoints();
         return;
     }
 
@@ -436,60 +433,92 @@ void EtherDreamDevice::sendPoints() {
         rateChangePending = false;
     }
 
-    sentFrame = true;
-    resetContext();
-    handlePostIteration(sentFrame);
+    //sentFrame = true;
+    resetPoints();
+    //handlePostIteration(sentFrame);
 }
 
 void EtherDreamDevice::sendClear() {
     std::cerr << "[EtherDream] clear required -> send 'c'\n";
     if (auto ack = sendCommand('c'); !ack) {
-        handleFailure("clear command", ack.error());
+        handleNetworkFailure("clear command", ack.error());
     }
 }
 
 void EtherDreamDevice::sendPrepare() {
     std::cerr << "[EtherDream] prepare required -> send 'p'\n";
     if (auto ack = sendCommand('p'); !ack) {
-        handleFailure("prepare command", ack.error());
+        handleNetworkFailure("prepare command", ack.error());
     }
 }
 
 void EtherDreamDevice::sendBegin() {
     std::cerr << "[EtherDream] begin required -> send 'b'\n";
     if (auto ack = sendBeginCommand(config::ETHERDREAM_TARGET_POINT_RATE); !ack) {
-        handleFailure("begin command", ack.error());
+        handleNetworkFailure("begin command", ack.error());
     }
 }
 
-void EtherDreamDevice::handlePostIteration(bool sentFrame) {
-    if (!running) {
-        return;
+std::uint16_t EtherDreamDevice::estimateBufferFullness() const {
+    const auto rate = lastKnownStatus.pointRate;
+    if (rate == 0) {
+        return lastKnownStatus.bufferFullness;
     }
 
-    if (sentFrame) {
-        idlePollCounter = 0;
-    } else {
-        ++idlePollCounter;
-        if (idlePollCounter >= 10) {
-            if (auto statusAck = sendCommand('?'); !statusAck) {
-                handleFailure("status poll", statusAck.error());
-                return;
-            }
-            idlePollCounter = 0;
-        }
+    if (lastReceiveTime == std::chrono::steady_clock::time_point{}) {
+        return lastKnownStatus.bufferFullness;
     }
 
-    ensureTargetPointRate();
-
-    const auto sleepDuration = computeSleepDuration(
-        lastKnownStatus,
-        config::ETHERDREAM_BUFFER_CAPACITY,
-        config::ETHERDREAM_MIN_PACKET_POINTS);
-    if (sleepDuration.count() > 0) {
-        std::this_thread::sleep_for(sleepDuration);
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = now - lastReceiveTime;
+    if (elapsed <= std::chrono::steady_clock::duration::zero()) {
+        return lastKnownStatus.bufferFullness;
     }
+
+    const auto elapsedUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+    if (elapsedUs <= 0) {
+        return lastKnownStatus.bufferFullness;
+    }
+
+    const double consumed =
+        (static_cast<double>(rate) * static_cast<double>(elapsedUs)) / 1'000'000.0;
+    const double estimated =
+        static_cast<double>(lastKnownStatus.bufferFullness) - consumed;
+    const double clamped =
+        std::clamp(estimated, 0.0, static_cast<double>(config::ETHERDREAM_BUFFER_CAPACITY));
+
+    return static_cast<std::uint16_t>(std::llround(clamped));
 }
+
+// void EtherDreamDevice::handlePostIteration(bool sentFrame) {
+//     if (!running) {
+//         return;
+//     }
+
+//     // if (sentFrame) {
+//     //     idlePollCounter = 0;
+//     // } else {
+//     //     ++idlePollCounter;
+//     //     if (idlePollCounter >= 10) {
+//     //         if (auto statusAck = sendCommand('?'); !statusAck) {
+//     //             handleNetworkFailure("status poll", statusAck.error());
+//     //             return;
+//     //         }
+//     //         idlePollCounter = 0;
+//     //     }
+//     // }
+
+//     ensureTargetPointRate();
+
+//     // const auto sleepDuration = computeSleepDuration(
+//     //     lastKnownStatus,
+//     //     config::ETHERDREAM_BUFFER_CAPACITY,
+//     //     config::ETHERDREAM_MIN_PACKET_POINTS);
+//     // if (sleepDuration.count() > 0) {
+//     //     std::this_thread::sleep_for(sleepDuration);
+//     // }
+// }
 
 void EtherDreamDevice::ensureTargetPointRate() {
     if (clearRequired || prepareRequired || beginRequired) {
@@ -498,10 +527,54 @@ void EtherDreamDevice::ensureTargetPointRate() {
 
     if (lastKnownStatus.playbackState == PlaybackState::Playing &&
         lastKnownStatus.pointRate != config::ETHERDREAM_TARGET_POINT_RATE) {
-        if (auto rateAck = setPointRate(config::ETHERDREAM_TARGET_POINT_RATE); !rateAck) {
-            handleFailure("point rate command", rateAck.error());
+        if (auto rateAck = sendPointRate(config::ETHERDREAM_TARGET_POINT_RATE); !rateAck) {
+            handleNetworkFailure("point rate command", rateAck.error());
         }
     }
+}
+
+void EtherDreamDevice::sleepUntilNextPoints() { 
+    std::this_thread::sleep_for(std::chrono::milliseconds{1}); 
+
+    // long long durationMS = computeSleepDurationMS(); 
+    // std::cout << "[EtherDreamDevice] Sleeping for " << durationMS << std::endl;  
+    // std::this_thread::sleep_for(std::chrono::milliseconds{durationMS}); 
+
+} 
+
+void EtherDreamDevice::resetPoints() { 
+        // pendingDesiredPoints = 0;
+        // pendingBufferFree = 0;
+        pointsToSend.clear();
+
+} 
+
+double 
+EtherDreamDevice :: pointsToMillis(std::size_t pointCount, std::uint32_t rate) {
+    if (rate == 0 || pointCount == 0) {
+        return 0; 
+    }
+
+    const double millis =
+        (static_cast<double>(pointCount) * 1000.0) / static_cast<double>(rate);
+
+    return std::max(millis, 0.0);
+}
+
+int EtherDreamDevice::millisToPoints(double millis, std::uint32_t rate) {
+    if (rate == 0 || millis <= 0.0) {
+        return 0;
+    }
+
+    const double seconds = millis / 1000.0;
+    const double rawPoints = seconds * static_cast<double>(rate);
+    const auto rounded = static_cast<long long>(std::llround(rawPoints));
+
+    if (rounded <= 0) {
+        return 0;
+    }
+
+    return static_cast<int>(std::min<long long>(rounded, std::numeric_limits<int>::max()));
 }
 
 } // namespace libera::etherdream

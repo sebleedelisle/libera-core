@@ -1,5 +1,6 @@
 #include "libera/core/LaserDeviceBase.hpp"
 #include <cassert>
+#include <iostream>
 
 namespace libera::core {
 
@@ -53,6 +54,7 @@ void LaserDeviceBase::start() {
 }
 
 void LaserDeviceBase::stop() {
+    std::cout << "[EtherDreamDevice] stop()\n"; 
     running = false;
     if (worker.joinable()) {
         worker.join();

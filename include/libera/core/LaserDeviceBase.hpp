@@ -26,6 +26,10 @@ struct PointFillRequest {
     std::chrono::steady_clock::time_point estimatedFirstPointRenderTime{};
 
     std::uint64_t currentPointIndex = 0; // absolute running counter
+
+    bool needsPoints(std::size_t minPoints) { 
+        return (minimumPointsRequired>minPoints) || (maximumPointsRequired>minPoints); 
+    }
 };
 
 /**
@@ -112,7 +116,7 @@ protected:
 
     virtual void run() = 0; // the worker loop
 
-    /// Latency budget shared by all laser devices (defaults to 50 ms).
+    /// Latency (defaults to 50 ms). 
     std::atomic<long long> latencyMillis{50};
 
     std::thread worker;

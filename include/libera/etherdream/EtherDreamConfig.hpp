@@ -17,9 +17,9 @@ constexpr std::uint16_t ETHERDREAM_TARGET_POINT_RATE = 30000;
 
 // Streaming behaviour ---------------------------------------------------------
 constexpr std::chrono::milliseconds ETHERDREAM_TICK_INTERVAL{33};
-constexpr std::size_t ETHERDREAM_BUFFER_CAPACITY = 1900;   // device FIFO depth in points
-constexpr std::size_t ETHERDREAM_MIN_PACKET_POINTS = 1000;  // minimum batch we want to ship
-constexpr std::chrono::milliseconds ETHERDREAM_MIN_SLEEP{5};
+constexpr std::size_t ETHERDREAM_BUFFER_CAPACITY = 1799;   // device FIFO depth in points
+constexpr std::size_t ETHERDREAM_MIN_PACKET_POINTS = 150;  // minimum batch we want to ship
+constexpr std::chrono::milliseconds ETHERDREAM_MIN_SLEEP{1};
 constexpr std::chrono::milliseconds ETHERDREAM_MAX_SLEEP{50};
 
 } // namespace libera::etherdream::config

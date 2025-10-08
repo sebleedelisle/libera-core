@@ -28,6 +28,7 @@
 #include <memory>
 #include <string_view>
 #include <optional>
+#include <chrono>
 
 namespace libera::etherdream {
 
@@ -51,6 +52,12 @@ public:
     EtherDreamDevice& operator=(const EtherDreamDevice&) = delete;
     EtherDreamDevice(EtherDreamDevice&&) = delete;
     EtherDreamDevice& operator=(EtherDreamDevice&&) = delete;
+
+    struct DacAck {
+        EtherDreamStatus status{};
+        char command = 0;
+    };
+
 
     /**
      * @brief Connect to the DAC using a resolved IP address.
@@ -79,12 +86,9 @@ protected:
 
 
 private:
-    struct DacAck {
-        EtherDreamStatus status{};
-        char command = 0;
-    };
+   
 
-    /// Wait for the "a" response frame to a specific command.
+    /// Wait for the response frame to a specific command.
     expected<DacAck>
     waitForResponse(char command);
 
@@ -97,21 +101,28 @@ private:
 
     /// Issue the point-rate command ('q') and return the associated ACK.
     expected<DacAck>
-    setPointRate(std::uint16_t rate);
+    sendPointRate(std::uint16_t rate);
 
-    static std::size_t calculateMinimumPoints(const EtherDreamStatus& status,
-                                              long long maxLatencyMillis);
+    std::size_t calculateMinimumPoints();
 
-    static std::size_t clampDesiredPoints(std::size_t minimumPointsNeeded,
-                                          std::size_t minPacketPoints,
-                                          std::size_t bufferFree);
+    // static std::size_t clampDesiredPoints(std::size_t minimumPointsNeeded,
+    //                                       std::size_t minPacketPoints,
+    //                                       std::size_t bufferFree);
 
-    static std::chrono::milliseconds computeSleepDuration(const EtherDreamStatus& status,
-                                                          std::size_t bufferCapacity,
-                                                          std::size_t minPacketPoints);
+//    long long computeSleepDurationMS();
+    void sleepUntilNextPoints();
 
-    void handleFailure(std::string_view where,
-                       const std::error_code& ec);
+    void handleNetworkFailure(std::string_view where,
+                              const std::error_code& ec);
+
+    void resetPoints();
+
+    double pointsToMillis(std::size_t pointCount,
+                          std::uint32_t rate);
+    int millisToPoints(double millis,
+                       std::uint32_t rate);
+
+    std::uint16_t estimateBufferFullness() const;
 
     void updatePlaybackRequirements(const EtherDreamStatus& status, bool commandAcked);
     core::PointFillRequest getFillRequest();
@@ -123,15 +134,18 @@ private:
     void ensureTargetPointRate();
 
     EtherDreamStatus lastKnownStatus{};
+    std::chrono::steady_clock::time_point lastReceiveTime{};
     libera::net::TcpClient tcpClient;
     std::optional<libera::net::asio::ip::address> rememberedAddress{};
     bool rateChangePending = false;
     bool clearRequired = false;
     bool prepareRequired = false;
     bool beginRequired = false;
-    std::size_t pendingDesiredPoints = 0;
-    std::size_t pendingBufferFree = 0;
-    std::size_t idlePollCounter = 0;
+    //std::size_t pendingDesiredPoints = 0;
+    //std::size_t pendingBufferFree = 0;
+    //std::size_t idlePollCounter = 0;
+    std::size_t minBuffer = 256; // for ether dream 3+ the buffer can't go below this
+
     bool failureEncountered = false;
 };
 
