@@ -3,7 +3,7 @@
 #include <chrono>
 #include <thread>
 #include <cmath>
-#include <random>
+#include <limits>
 
 using namespace libera;
 
@@ -19,53 +19,90 @@ int main() {
     //    the provided vector without allocating (no reserve/resize here).
     etherdream.setRequestPointsCallback(
         [](const core::PointFillRequest& req, std::vector<core::LaserPoint>& out) {
-            const std::size_t minCount = req.minimumPointsRequired;
-            const std::size_t maxCount = req.maximumPointsRequired;
+            static const std::vector<core::LaserPoint> circle = []{
+                constexpr std::size_t kCirclePoints = 500;
+                std::vector<core::LaserPoint> pts;
+                pts.reserve(kCirclePoints);
+                const float tau = 2.0f * static_cast<float>(std::acos(-1.0));
+                for (std::size_t i = 0; i < kCirclePoints; ++i) {
+                    const float t = static_cast<float>(i) / static_cast<float>(kCirclePoints);
+                    const float angle = t * tau;
+                    const float x = std::cos(angle);
+                    const float y = std::sin(angle);
 
-            if (maxCount == 0) {
-                return;
-            }
+                    float r = 0.0f;
+                    float g = 0.0f;
+                    float b = 0.0f;
 
-            const std::size_t low = std::min(minCount, maxCount);
-            const std::size_t high = std::max(minCount, maxCount);
+                    if (x >= 0.0f && y >= 0.0f) {
+                        r = g = b = 1.0f; // quadrant I – white
+                    } else if (x < 0.0f && y >= 0.0f) {
+                        r = 1.0f;         // quadrant II – red
+                    } else if (x < 0.0f && y < 0.0f) {
+                        g = 1.0f;         // quadrant III – green
+                    } else {
+                        b = 1.0f;         // quadrant IV – blue
+                    }
 
-            static thread_local std::mt19937 rng{std::random_device{}()};
-            std::uniform_int_distribution<std::size_t> dist(low, high);
-            const std::size_t pointCount = dist(rng);
-            if (pointCount == 0) {
-                return;
-            }
-
-            // Evenly distribute points along the unit circle.
-            const float tau = 2.0f * static_cast<float>(std::acos(-1.0));
-            for (std::size_t i = 0; i < pointCount; ++i) {
-                const float t = static_cast<float>(i) / static_cast<float>(pointCount);
-                const float angle = t * tau;
-                const float x = std::cos(angle);
-                const float y = std::sin(angle);
-
-                float r = 0.0f;
-                float g = 0.0f;
-                float b = 0.0f;
-
-                if (x >= 0.0f && y >= 0.0f) {
-                    r = g = b = 1.0f; // quadrant I – white
-                } else if (x < 0.0f && y >= 0.0f) {
-                    r = 1.0f;         // quadrant II – red
-                } else if (x < 0.0f && y < 0.0f) {
-                    g = 1.0f;         // quadrant III – green
-                } else {
-                    b = 1.0f;         // quadrant IV – blue
+                    constexpr float brightness = 0.2f;
+                    pts.emplace_back(core::LaserPoint{
+                        x,
+                        y,
+                        r * brightness,
+                        g * brightness,
+                        b * brightness,
+                        1.0f,
+                        0.0f,
+                        0.0f
+                    });
                 }
-                float brightness = 0.2; 
-                r*=brightness; 
-                g*=brightness; 
-                b*=brightness; 
-                    
-                out.push_back(core::LaserPoint{x, y, r, g, b, 1.0f, 0.0f, 0.0f});
+                return pts;
+            }();
+
+            static std::size_t cursor = 0;
+
+            if (circle.empty()) {
+                return;
             }
-        }
-    );
+
+            std::size_t minNeeded = req.minimumPointsRequired;
+            if (minNeeded == 0) {
+                minNeeded = circle.size(); // default to a full revolution
+            }
+
+            const std::size_t maxAllowed =
+                req.maximumPointsRequired == 0
+                    ? std::numeric_limits<std::size_t>::max()
+                    : req.maximumPointsRequired;
+
+            if (req.maximumPointsRequired > 0 && minNeeded > req.maximumPointsRequired) {
+                minNeeded = req.maximumPointsRequired;
+            }
+
+            std::size_t target = std::max(minNeeded, circle.size());
+            target = std::min(target, maxAllowed);
+
+            if (target == 0) {
+                return;
+            }
+
+            std::size_t produced = 0;
+            while (produced < target) {
+                const std::size_t remaining = target - produced;
+                const std::size_t available = circle.size() - cursor;
+                const std::size_t chunk = std::min(remaining, available);
+                if (chunk == 0) {
+                    cursor = 0;
+                    continue;
+                }
+                out.insert(out.end(),
+                           circle.begin() + cursor,
+                           circle.begin() + cursor + chunk);
+
+                cursor = (cursor + chunk) % circle.size();
+                produced += chunk;
+            }
+        });
 
     // 4) (Optional) Connect to a real EtherDream on your LAN.
     //    If you’re just testing the threading/callback flow, you can skip this.
@@ -74,6 +111,7 @@ int main() {
     
    //if (auto r = etherdream.connect("192.168.1.203"); !r) {
    if (auto r = etherdream.connect("192.168.1.76"); !r) {
+   //if (auto r = etherdream.connect("127.0.0.1"); !r) {
         const auto err = r.error();
         std::cerr << "Connect failed: " << err.message()
                   << " (" << err.category().name() << ":" << err.value() << ")\n";

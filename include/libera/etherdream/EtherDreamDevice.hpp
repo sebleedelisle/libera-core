@@ -105,11 +105,7 @@ private:
 
     std::size_t calculateMinimumPoints();
 
-    // static std::size_t clampDesiredPoints(std::size_t minimumPointsNeeded,
-    //                                       std::size_t minPacketPoints,
-    //                                       std::size_t bufferFree);
-
-//    long long computeSleepDurationMS();
+    long long computeSleepDurationMS();
     void sleepUntilNextPoints();
 
     void handleNetworkFailure(std::string_view where,

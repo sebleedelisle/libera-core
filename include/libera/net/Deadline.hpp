@@ -41,7 +41,7 @@ std::error_code with_deadline(
     StartAsync start_async,
     Cancel cancel)
 {
-    std::cout << "[with_deadline] start timeout=" << timeout.count() << "ms\n";
+    //std::cout << "[with_deadline] start timeout=" << timeout.count() << "ms\n";
     struct State {
         std::mutex m;
         std::condition_variable cv;

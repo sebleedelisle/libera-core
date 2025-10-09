@@ -25,7 +25,7 @@ namespace libera::etherdream {
 
 using libera::expected;
 using libera::unexpected;
-
+using DacAck = EtherDreamDevice::DacAck;
 namespace ip = libera::net::asio::ip;
 namespace asio = libera::net::asio;
 
@@ -151,7 +151,7 @@ void EtherDreamDevice::run() {
     close();
 }
 
-expected<EtherDreamDevice::DacAck>
+expected<DacAck>
 EtherDreamDevice::waitForResponse(char command) {
     if (!running) {
         return unexpected(std::make_error_code(std::errc::operation_canceled));
@@ -201,7 +201,7 @@ EtherDreamDevice::waitForResponse(char command) {
     return DacAck{response.status, static_cast<char>(response.command)};
 }
 
-expected<EtherDreamDevice::DacAck>
+expected<DacAck>
 EtherDreamDevice :: sendCommand(char command) {
 
     if (!running) {
@@ -218,7 +218,7 @@ EtherDreamDevice :: sendCommand(char command) {
     return waitForResponse(command);
 }
 
-expected<EtherDreamDevice::DacAck>
+expected<DacAck>
 EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
 
     const long long timeoutMillis = latencyMillis;
@@ -240,7 +240,7 @@ EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
     return waitForResponse('b');
 }
 
-expected<EtherDreamDevice::DacAck>
+expected<DacAck>
 EtherDreamDevice::sendPointRate(std::uint16_t rate) {
     
     const long long timeoutMillis = latencyMillis;
@@ -295,29 +295,29 @@ EtherDreamDevice::calculateMinimumPoints() {
 }
 
 
-// long long
-// EtherDreamDevice::computeSleepDurationMS() {
+long long
+EtherDreamDevice::computeSleepDurationMS() {
    
 
-// // ok the logic here is. Get the min point count before we need to send (based on latency)
-//     const auto latency = latencyMillis.load(std::memory_order_relaxed);
-//     if (latency <= 0 || lastKnownStatus.pointRate == 0) {
-//         return 0;
-//     }
+// ok the logic here is. Get the min point count before we need to send (based on latency)
+    const auto latency = latencyMillis.load(std::memory_order_relaxed);
+    if (latency <= 0 || lastKnownStatus.pointRate == 0) {
+        return 0;
+    }
 
-//     const int minPointsInBuffer = millisToPoints(latency, lastKnownStatus.pointRate);
+    const int minPointsInBuffer = millisToPoints(latency, lastKnownStatus.pointRate);
 
-// // figure out how long it will take before we get there
+// figure out how long it will take before we get there
 
-//     const auto fullness = estimateBufferFullness();
-//     const int deficit = static_cast<int>(fullness) - minPointsInBuffer;
-//     const int pointsToWait = std::min<int>(config::ETHERDREAM_MIN_PACKET_POINTS,
-//                                         std::max(deficit, 0));
+    const auto fullness = estimateBufferFullness();
+    const int deficit = static_cast<int>(fullness) - minPointsInBuffer;
+    const int pointsToWait = std::min<int>(config::ETHERDREAM_MIN_PACKET_POINTS,
+                                        std::max(deficit, 0));
 
-//     // 5 is maximum sleep time that we want
-//     return (long long) std::min<long long> (5, pointsToMillis(pointsToWait, lastKnownStatus.pointRate)); 
+    // 5 is maximum sleep time that we want
+    return (long long) std::min<long long> (5, pointsToMillis(pointsToWait, lastKnownStatus.pointRate)); 
     
-// }
+}
 
 void EtherDreamDevice::handleNetworkFailure(std::string_view where,
                                      const std::error_code& ec) {
@@ -534,11 +534,11 @@ void EtherDreamDevice::ensureTargetPointRate() {
 }
 
 void EtherDreamDevice::sleepUntilNextPoints() { 
-    std::this_thread::sleep_for(std::chrono::milliseconds{1}); 
+   // std::this_thread::sleep_for(std::chrono::milliseconds{1}); 
 
-    // long long durationMS = computeSleepDurationMS(); 
-    // std::cout << "[EtherDreamDevice] Sleeping for " << durationMS << std::endl;  
-    // std::this_thread::sleep_for(std::chrono::milliseconds{durationMS}); 
+    long long durationMS = computeSleepDurationMS(); 
+    std::cout << "[EtherDreamDevice] Sleeping for " << durationMS << std::endl;  
+    std::this_thread::sleep_for(std::chrono::milliseconds{durationMS}); 
 
 } 
 
