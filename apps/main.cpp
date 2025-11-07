@@ -8,15 +8,12 @@
 using namespace libera;
 
 int main() {
-
-
-    //libera::net::set_default_timeout_ms(5000);
+    // libera::net::set_default_timeout_ms(5000); // Optional global timeout override.
 
     etherdream::EtherDreamDevice etherdream;
 
-    // 3) Install your point-generation callback.
-    //    This demonstrates the LaserDeviceBase contract: append N points to
-    //    the provided vector without allocating (no reserve/resize here).
+    // Step 3: Install the point-generation callback required by LaserDeviceBase.
+    //         Append points without reallocating (avoid reserve/resize here).
     etherdream.setRequestPointsCallback(
         [](const core::PointFillRequest& req, std::vector<core::LaserPoint>& out) {
             static const std::vector<core::LaserPoint> circle = []{
@@ -35,13 +32,13 @@ int main() {
                     float b = 0.0f;
 
                     if (x >= 0.0f && y >= 0.0f) {
-                        r = g = b = 1.0f; // quadrant I – white
+                        r = g = b = 1.0f; // Quadrant I - white.
                     } else if (x < 0.0f && y >= 0.0f) {
-                        r = 1.0f;         // quadrant II – red
+                        r = 1.0f;         // Quadrant II - red.
                     } else if (x < 0.0f && y < 0.0f) {
-                        g = 1.0f;         // quadrant III – green
+                        g = 1.0f;         // Quadrant III - green.
                     } else {
-                        b = 1.0f;         // quadrant IV – blue
+                        b = 1.0f;         // Quadrant IV - blue.
                     }
 
                     constexpr float brightness = 0.2f;
@@ -104,26 +101,26 @@ int main() {
             }
         });
 
-    // 4) (Optional) Connect to a real EtherDream on your LAN.
-    //    If you’re just testing the threading/callback flow, you can skip this.
-    //    Replace the IP below with your device address when ready.
-    //    On macOS you may need to allow the app in firewall prompts.
-    
-   //if (auto r = etherdream.connect("192.168.1.203"); !r) {
+    // Step 4 (optional): Connect to a real EtherDream on your LAN.
+    //                    If you are only testing the callback flow, skip this.
+    //                    Replace the IP below with your device address when ready.
+    //                    On macOS you may need to allow the app in firewall prompts.
+    // Example alternatives for local testing:
+    // if (auto r = etherdream.connect("192.168.1.203"); !r) {
    if (auto r = etherdream.connect("192.168.1.76"); !r) {
-   //if (auto r = etherdream.connect("127.0.0.1"); !r) {
+   // if (auto r = etherdream.connect("127.0.0.1"); !r) {
         const auto err = r.error();
         std::cerr << "Connect failed: " << err.message()
                   << " (" << err.category().name() << ":" << err.value() << ")\n";
     } else { 
-        // 5) Start the device worker thread (calls EtherDreamDevice::run()).
+        // Step 5: Start the device worker thread (calls EtherDreamDevice::run()).
         std::cout << "Starting dummy run..." << std::endl;
         etherdream.start();
 
         // Keep main alive long enough for the worker to do a few ticks.
         std::this_thread::sleep_for(std::chrono::seconds(30));
 
-        // 6) Stop the device worker and close the socket (if you connected).
+        // Step 6: Stop the device worker and close the socket if you connected.
         etherdream.stop();
         etherdream.close();
         std::cout << "Done." << std::endl;

@@ -5,9 +5,8 @@
 namespace libera::core {
 
 LaserDeviceBase::LaserDeviceBase() {
-    // Pre-reserve a large capacity so vectors can be reused
-    // without reallocating in the real-time path.
-    // 30,000 points is intentionally generous — safe for most DACs.
+    // Pre-reserve a large capacity so vectors can be reused without reallocating.
+    // Thirty thousand points is intentionally generous and remains safe for most DACs.
     pointsToSend.reserve(30000);
 }
 
@@ -16,24 +15,23 @@ LaserDeviceBase::~LaserDeviceBase() {
 }
 
 void LaserDeviceBase::setRequestPointsCallback(const RequestPointsCallback &callback) {
-    // Store the callback (copied in).
+    // Store the callback (copied into the functor).
     requestPointsCallback = callback;
 }
 
 bool LaserDeviceBase::requestPoints(const PointFillRequest &request) {
     if (!requestPointsCallback) {
-        // No callback set — cannot produce points.
+        // No callback set, so there is no way to produce points.
         return false;
     }
 
-    // Reset transmission buffer (capacity retained).
+    // Reset transmission buffer while retaining capacity.
     pointsToSend.clear();
 
-    // Ask user-supplied callback to append new points.
+    // Ask the user-supplied callback to append new points.
     requestPointsCallback(request, pointsToSend);
 
-    // Debug-only: enforce the contract that callback produced
-    // at least the requested minimum number of points.
+    // Debug-only: enforce the contract that the callback produced at least the requested minimum.
     assert(pointsToSend.size() >= request.minimumPointsRequired &&
            "Callback did not provide the minimum required number of points.");
     if (request.maximumPointsRequired > 0) {
@@ -46,10 +44,10 @@ bool LaserDeviceBase::requestPoints(const PointFillRequest &request) {
 
 
 void LaserDeviceBase::start() {
-    if (running) return; // already running
+    if (running) return; // Already running.
     running = true;
     worker = std::thread([this] {
-        this->run(); // calls the virtual run(), so subclass overrides work
+        this->run(); // Calls the virtual run(), so subclass overrides execute.
     });
 }
 

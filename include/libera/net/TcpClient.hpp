@@ -1,23 +1,3 @@
-
-// 3) libera::net::TcpClient
-// A very thin wrapper around a TCP socket that adds per-operation timeouts
-// and ensures serialized access.
-//
-// Key methods:
-// - connect(endpoints, timeout) → connect with timeout (tries a sequence)
-// - read_exact(buf, n, timeout) → read exactly N bytes with timeout
-// - write_all(buf, n, timeout) → write N bytes with timeout
-// - setLowLatency() → TCP_NODELAY + keepalive
-// - close() → cancel + shutdown + close safely
-//
-// Asio details you might not use in openFrameworks:
-// - We construct the socket with a `strand` executor. A strand guarantees that
-//   handlers posted through it do not run concurrently. This effectively
-//   serializes socket operations without manual mutexes.
-// - Each I/O function uses `with_deadline(...)`: we start the async op and a
-//   timer; cancel whichever loses. We then wait synchronously for completion
-//   (your io_context must be running on some thread).
-
 #pragma once
 #include "libera/net/NetConfig.hpp"
 #include "libera/net/Deadline.hpp"
@@ -31,13 +11,15 @@ namespace libera::net {
 using std::chrono::milliseconds;
 
 /**
- * TcpClient
- *  - connect() with timeout
- *  - write_all() with timeout
- *  - read_exact() with timeout
- *  - set_low_latency() (TCP_NODELAY + keepalive)
+ * @brief Thin wrapper around `tcp::socket` that adds deadlines and low-latency options.
  *
- * Assumes the asio::io_context is running elsewhere.
+ * Highlights:
+ * - `connect(...)` retries endpoints and respects a per-attempt timeout.
+ * - `read_exact(...)` and `write_all(...)` block the caller while enforcing deadlines.
+ * - `setLowLatency()` enables TCP_NODELAY and keepalive to reduce jitter.
+ * - All socket work is serialized by a strand executor.
+ *
+ * The caller must keep the owning `asio::io_context` running while using the API.
  */
 class TcpClient {
 public:
@@ -145,7 +127,7 @@ public:
             std::cout << "[TcpClient] close()\n"; 
         if (!socket_.is_open()) return;
         std::error_code ec;
-        // Proactively cancel any outstanding operations first (pattern: cancel → shutdown → close)
+        // Proactively cancel outstanding operations first (pattern: cancel -> shutdown -> close).
         socket_.cancel(ec);
         socket_.shutdown(tcp::socket::shutdown_both, ec);
         socket_.close(ec);

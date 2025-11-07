@@ -361,15 +361,15 @@ encode(const Schema<T, FieldsTuple, ObjValidatorT>& sch, const T& obj) {
         ( ( [&](){
             if (failed) return;
 
-           // encode loop, inside the apply:
+           // Encode each field inside the apply expansion.
             const auto& v = obj.*(fd.memberPtr);
 
-            // validate before writing
+            // Validate before writing.
             if (auto ok = detail::runFieldValidators(fd, v); !ok) {
                 failed = true; err = ok.error(); return;
             }
 
-            // write, with enum→underlying conversion if needed
+            // Write with enum-to-underlying conversion if needed.
             if constexpr (std::is_enum_v<std::decay_t<decltype(v)>>) {
                 using U = typename std::underlying_type<std::decay_t<decltype(v)>>::type;
                 fd.codec.write(static_cast<U>(v), out);

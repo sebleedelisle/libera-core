@@ -1,27 +1,19 @@
-
-// libera::net::NetConfig
-// What: a tiny header that gives you one namespace for networking stuff.
-// Why: so higher-level code never touches boost::asio vs asio directly.
-// You get:
-// libera::net::asio → the Asio API (standalone in your setup)
-// libera::net::tcp / udp → handy aliases
-// Think of this as a translation layer so the rest of your code is consistent.
-
 #pragma once
 
 #include <asio.hpp>       // from libs/asio/include
 #include <system_error>   // std::error_code
 
-
-
-
 namespace libera::net {
 
-    // Expose standalone Asio under libera::net::asio
-    namespace asio = ::asio;
+/**
+ * @brief Centralises networking aliases so higher-level code never includes Asio directly.
+ *
+ * Exposes:
+ * - `libera::net::asio` as the standalone Asio namespace.
+ * - `libera::net::tcp` and `libera::net::udp` as handy protocol aliases.
+ */
+namespace asio = ::asio;
 
-    // Shorthand type aliases for convenience
-    using tcp = asio::ip::tcp;
-    using udp = asio::ip::udp;
-
+using tcp = asio::ip::tcp;
+using udp = asio::ip::udp;
 } // namespace libera::net

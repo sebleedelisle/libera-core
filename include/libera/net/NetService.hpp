@@ -7,33 +7,26 @@
 namespace libera::net {
 
 /**
- * NetService
+ * @brief RAII wrapper around `asio::io_context` that runs a dedicated I/O thread.
  *
- * What it is:
- * - A tiny RAII wrapper around `asio::io_context` that starts a dedicated
- *   background thread to drive all asynchronous I/O and timers.
+ * Motivation:
+ * - openFrameworks code often blocks on the main thread; here we embrace Asio's
+ *   async model by driving a single background loop and posting work to it.
+ * - Serialising all socket and timer operations through one executor keeps the
+ *   app responsive and avoids racy multi-thread socket access.
  *
- * Why this pattern:
- * - In plain openFrameworks you often do blocking I/O on the main thread.
- *   Here we lean into Asio's async model: we run a single I/O thread and
- *   post all socket/timer work to it. This keeps the app responsive and
- *   avoids tricky multi-thread access to sockets.
+ * Implementation highlights:
+ * - Holds a shared `asio::io_context` plus an `executor_work_guard` to keep it alive.
+ * - A background `std::thread` calls `io_.run()` until the guard is released.
  *
- * Key pieces:
- * - `asio::io_context` (shared_ptr-owned) is the event loop for all async operations.
- * - `executor_work_guard` prevents the loop from exiting when idle.
- * - A background `std::thread` calls `io_.run()` until destruction.
+ * Lifetime notes:
+ * - Destroy network clients before `NetService` so their handlers complete while
+ *   the `io_context` is still running.
+ * - The destructor releases the work guard, calls `stop()`, and joins the thread.
  *
- * Lifetime and shutdown:
- * - Destroy network-using objects (controllers, sockets) before NetService so
- *   their async handlers are cancelled/finished while the io_context still runs.
- * - In the destructor we reset the work guard, call `stop()`, and join the
- *   thread—this is the orderly shutdown sequence recommended by Asio.
- *
- * Convenience helpers:
- * - Most code uses `libera::net::shared_io_context()` or `io_context()` to grab
- *   the process-wide I/O loop owned by a static NetService instance. Tests can
- *   still instantiate their own NetService for isolation.
+ * Convenience:
+ * - `shared_io_context()` returns the process-wide instance for callers that do not
+ *   need a dedicated loop.
  */
 class NetService {
 public:

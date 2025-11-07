@@ -1,22 +1,3 @@
-
-
-// EtherDream controller — high-level notes
-//
-// Responsibilities:
-// 1) Connect to the DAC over TCP.
-// 2) Periodically poll status (ACK + 20-byte dac_status), decode it, and react.
-// 3) Ask the user callback for more points and transmit them in device format.
-// 4) Manage its own worker loop (derived from LaserDeviceBase::run()).
-//
-// Design choices for clarity:
-// - Networking is delegated to `libera::net::TcpClient` for timeouts/cancellation.
-// - Status decoding is in `etherdream_schema.hpp` to keep wire parsing separate.
-// - The worker loop is a simple thread in this version; you can migrate to an
-//   `asio::steady_timer` on the io_context for a fully single-threaded design.
-
-
-// EtherDreamDevice.hpp
-
 #pragma once
 #include "libera/core/Expected.hpp"
 #include "libera/core/LaserDeviceBase.hpp"
@@ -39,8 +20,15 @@ namespace ip = libera::net::asio::ip;
  * @brief Streaming controller that talks to an EtherDream DAC.
  *
  * The device inherits latency management, worker thread lifecycle, and point
- * buffering from LaserDeviceBase. The latency budget exposed by the base class
- * is used both for sizing refill batches and for per-operation TCP deadlines.
+ * buffering from `LaserDeviceBase`. The latency budget exposed by the base
+ * class feeds both refill sizing and the per-operation TCP deadlines enforced
+ * by `libera::net::TcpClient`.
+ *
+ * Responsibilities:
+ * - Maintain the TCP connection to the DAC.
+ * - Poll status frames, decode them via `EtherDreamResponse`, and react.
+ * - Request points from the user callback and stream device-formatted frames.
+ * - Drive the worker loop supplied by the base class.
  */
 class EtherDreamDevice : public libera::core::LaserDeviceBase {
 public:
@@ -126,7 +114,6 @@ private:
     void sendClear();
     void sendPrepare();
     void sendBegin();
-    void handlePostIteration(bool sentFrame);
     void ensureTargetPointRate();
 
     EtherDreamStatus lastKnownStatus{};
@@ -137,10 +124,7 @@ private:
     bool clearRequired = false;
     bool prepareRequired = false;
     bool beginRequired = false;
-    //std::size_t pendingDesiredPoints = 0;
-    //std::size_t pendingBufferFree = 0;
-    //std::size_t idlePollCounter = 0;
-    std::size_t minBuffer = 256; // for ether dream 3+ the buffer can't go below this
+    std::size_t minBuffer = 256; // EtherDream 3+ cannot report below this buffer depth.
 
     bool failureEncountered = false;
 };

@@ -6,31 +6,31 @@
 #include <mutex>
 #include <memory>
 #include <iostream>
-#include <iostream>
 
 /**
- * with_deadline
+ * @brief Run an async operation with a deadline enforced by an Asio timer.
  *
  * Pattern:
  * - Start an async operation and an `asio::steady_timer` on the same executor.
  * - Whichever completes first cancels the other and signals a condition
- *   variable so this call can return a result synchronously with a timeout.
+ *   variable so this call can return synchronously with a timeout.
  *
- * Why it’s useful:
- * - In openFrameworks you might reach for blocking calls with timeouts; with
- *   Asio, a common pattern is: async + timer + cancel. This utility wraps that
- *   into a concise helper that returns a `std::error_code`.
+ * Why it is useful:
+ * - Blocking APIs with timeouts are common in openFrameworks; in Asio the
+ *   equivalent pattern is "async operation + timer + cancel". This helper wraps
+ *   that flow and surfaces the resulting `std::error_code`.
  *
- * Safety notes (subtle C++/Asio details):
- * - The completion handlers capture a `shared_ptr<State>` so they never access
- *   destroyed mutex/condition_variable even if they run after this function
+ * Safety notes:
+ * - Completion handlers capture a `shared_ptr<State>` so they cannot access
+ *   destroyed synchronisation primitives even if they run after this function
  *   returns. This avoids a common use-after-free race in naive implementations.
- * - `cancel()` must cancel the same socket/timer that started the operation; we
- *   pass it in from the caller so it can call `socket.cancel()` or similar.
+ * - The `cancel()` functor must cancel the same socket or timer that launched
+ *   the operation; callers supply it so they can call `socket.cancel()` and
+ *   keep ownership decisions at the call site.
  *
  * Requirements:
- * - Your `asio::io_context` must be running (e.g., via NetService) while we
- *   block waiting. If it is not, this function would wait forever.
+ * - The associated `asio::io_context` must already be running while we block.
+ *   Otherwise the wait would never complete.
  */
 namespace libera::net {
 
@@ -71,7 +71,7 @@ std::error_code with_deadline(
     timer->expires_after(timeout);
     timer->async_wait([st, cancel, timer, timeout](const std::error_code& tec){
         if (tec == asio::error::operation_aborted) {
-            // Cancelled because op finished — do nothing.
+            // Cancelled because the operation finished first, so nothing to do.
             return;
         }
         bool notify = false;

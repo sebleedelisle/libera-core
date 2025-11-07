@@ -1,9 +1,3 @@
-// EtherDreamConfig.hpp
-// -----------------------------------------------------------------------------
-// Centralized constants that describe timing and buffer configuration for the
-// EtherDream device integration. Keeping them here prevents "magic numbers"
-// from drifting across translation units.
-
 #pragma once
 
 #include <chrono>
@@ -11,7 +5,14 @@
 
 namespace libera::etherdream::config {
 
-// Networking -----------------------------------------------------------------
+/**
+ * @brief Constants that define EtherDream networking and streaming behaviour.
+ *
+ * Keeping the values here prevents magic numbers from drifting across
+ * translation units and makes it easy to tune the integration in one place.
+ */
+
+// Networking ------------------------------------------------------------------
 constexpr unsigned short ETHERDREAM_DAC_PORT_DEFAULT = 7765;
 constexpr std::uint16_t ETHERDREAM_TARGET_POINT_RATE = 30000;
 

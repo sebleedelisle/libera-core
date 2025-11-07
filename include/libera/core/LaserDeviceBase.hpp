@@ -22,13 +22,14 @@ struct PointFillRequest {
     std::size_t maximumPointsRequired = 0;
 
     /// Host-side estimate of when the first point in this batch will reach the mirrors.
-    /// (This is advisory — implementations can ignore or use it for scheduling.)
+    /// (This is advisory; implementations can ignore or use it for scheduling.)
     std::chrono::steady_clock::time_point estimatedFirstPointRenderTime{};
 
-    std::uint64_t currentPointIndex = 0; // absolute running counter
+    /// Absolute running counter for emitted points.
+    std::uint64_t currentPointIndex = 0;
 
-    bool needsPoints(std::size_t minPoints) { 
-        return (minimumPointsRequired>minPoints) || (maximumPointsRequired>minPoints); 
+    [[nodiscard]] bool needsPoints(std::size_t minPoints) const {
+        return (minimumPointsRequired > minPoints) || (maximumPointsRequired > minPoints);
     }
 };
 
@@ -91,8 +92,7 @@ public:
      */
     bool requestPoints(const PointFillRequest &request);
 
-
-     /// Start the worker thread.
+    /// Start the worker thread.
     void start();
 
     /// Request the thread to stop and wait for it to finish.
@@ -112,11 +112,10 @@ public:
     long long getLatency() const;
 
 protected:
+    /// Worker loop implemented by subclasses.
+    virtual void run() = 0;
 
-
-    virtual void run() = 0; // the worker loop
-
-    /// Latency (defaults to 50 ms). 
+    /// Latency (defaults to 50 ms).
     std::atomic<long long> latencyMillis{50};
 
     std::thread worker;
@@ -127,8 +126,6 @@ protected:
 
     /// Main buffer of points pending transmission to the DAC.
     std::vector<LaserPoint> pointsToSend;
-
-
 };
 
 } // namespace libera::core
