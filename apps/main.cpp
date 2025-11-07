@@ -1,5 +1,5 @@
 #include "libera/etherdream/EtherDreamDevice.hpp"
-#include <iostream>
+#include "libera/core/Log.hpp"
 #include <chrono>
 #include <thread>
 #include <cmath>
@@ -110,11 +110,11 @@ int main() {
    if (auto r = etherdream.connect("192.168.1.76"); !r) {
    // if (auto r = etherdream.connect("127.0.0.1"); !r) {
         const auto err = r.error();
-        std::cerr << "Connect failed: " << err.message()
-                  << " (" << err.category().name() << ":" << err.value() << ")\n";
+        libera::core::logErrorf("Connect failed: ", err.message(),
+                                " (", err.category().name(), ":", err.value(), ")\n");
     } else { 
         // Step 5: Start the device worker thread (calls EtherDreamDevice::run()).
-        std::cout << "Starting dummy run..." << std::endl;
+        libera::core::logInfo("Starting dummy run...\n");
         etherdream.start();
 
         // Keep main alive long enough for the worker to do a few ticks.
@@ -123,7 +123,7 @@ int main() {
         // Step 6: Stop the device worker and close the socket if you connected.
         etherdream.stop();
         etherdream.close();
-        std::cout << "Done." << std::endl;
+        libera::core::logInfo("Done.\n");
     }
     
 

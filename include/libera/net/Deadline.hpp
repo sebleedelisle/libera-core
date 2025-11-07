@@ -1,11 +1,11 @@
 #pragma once
 #include "libera/net/NetConfig.hpp"
+#include "libera/core/Log.hpp"
 
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <memory>
-#include <iostream>
 
 /**
  * @brief Run an async operation with a deadline enforced by an Asio timer.
@@ -85,8 +85,8 @@ std::error_code with_deadline(
             notify = true;
         }
         if (notify) {
-            std::cout << "[with_deadline] timeout fired after "
-                      << timeout.count() << "ms\n";
+            libera::core::logInfof("[with_deadline] timeout fired after ",
+                                   timeout.count(), "ms\n");
             cancel();
             st->cv.notify_one();
         }

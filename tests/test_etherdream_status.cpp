@@ -1,21 +1,21 @@
 #include "libera/etherdream/EtherDreamResponse.hpp"
+#include "libera/core/Log.hpp"
 
 #include <array>
 #include <cstdint>
-#include <iostream>
 
 using namespace libera::etherdream;
 
 static int g_failures = 0;
 
 #define ASSERT_TRUE(cond, msg) \
-    do { if (!(cond)) { std::cerr << "ASSERT TRUE FAILED: " << (msg) \
-        << "  @ " << __FILE__ << ":" << __LINE__ << "\n"; ++g_failures; } } while(0)
+    do { if (!(cond)) { libera::core::logErrorf("ASSERT TRUE FAILED: ", (msg), \
+        "  @ ", __FILE__, ":", __LINE__, "\n"); ++g_failures; } } while(0)
 
 #define ASSERT_EQ(a,b,msg) \
-    do { auto _va=(a); auto _vb=(b); if (!((_va)==(_vb))) { std::cerr << "ASSERT EQ FAILED: " << (msg) \
-        << "  (" << +_va << " != " << +_vb << ")" \
-        << "  @ " << __FILE__ << ":" << __LINE__ << "\n"; ++g_failures; } } while(0)
+    do { auto _va=(a); auto _vb=(b); if (!((_va)==(_vb))) { libera::core::logErrorf("ASSERT EQ FAILED: ", (msg), \
+        "  (", +_va, " != ", +_vb, ")" \
+        "  @ ", __FILE__, ":", __LINE__, "\n"); ++g_failures; } } while(0)
 
 static std::array<std::uint8_t, 22> makeAck(char cmd, std::uint16_t bufferFullness, std::uint32_t pointRate) {
     std::array<std::uint8_t, 22> raw{};
@@ -58,9 +58,9 @@ int main() {
     testRejectShort();
 
     if (g_failures) {
-        std::cerr << "Tests failed: " << g_failures << " failure(s)\n";
+        libera::core::logErrorf("Tests failed: ", g_failures, " failure(s)\n");
         return 1;
     }
-    std::cout << "EtherDreamResponse tests passed.\n";
+    libera::core::logInfo("EtherDreamResponse tests passed.\n");
     return 0;
 }

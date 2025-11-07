@@ -1,6 +1,6 @@
 #include "libera/core/LaserDeviceBase.hpp"
+#include "libera/core/Log.hpp"
 #include <cassert>
-#include <iostream>
 
 namespace libera::core {
 
@@ -52,7 +52,8 @@ void LaserDeviceBase::start() {
 }
 
 void LaserDeviceBase::stop() {
-    std::cout << "[EtherDreamDevice] stop()\n"; 
+    // Signal the worker loop to exit and wait until the background thread finishes.
+    logInfo("[EtherDreamDevice] stop()\n");
     running = false;
     if (worker.joinable()) {
         worker.join();

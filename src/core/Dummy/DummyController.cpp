@@ -1,6 +1,6 @@
 #include "libera/core/Dummy/DummyController.hpp"
+#include "libera/core/Log.hpp"
 #include <chrono>
-#include <iostream>
 
 namespace libera::core::dummy {
 
@@ -24,8 +24,7 @@ void DummyController::run() {
         req.estimatedFirstPointRenderTime = steady_clock::now();
 
         if (requestPoints(req)) {
-            std::cout << "Pulled " << pointsToSend.size()
-                      << " new points." << std::endl;
+            libera::core::logInfof("Pulled ", pointsToSend.size(), " new points.\n");
         }
 
         std::this_thread::sleep_for(interval);
