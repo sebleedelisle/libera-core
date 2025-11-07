@@ -1,6 +1,6 @@
 #pragma once
 
-#include "libera/etherdream/ByteBuffer.hpp"
+#include "libera/core/ByteBuffer.hpp"
 #include "libera/core/LaserPoint.hpp"
 
 #include <cstddef>
@@ -27,7 +27,7 @@ private:
     static std::int16_t encodeCoordinate(float value) noexcept;
     static std::uint16_t encodeChannel(float value) noexcept;
 
-    ByteBuffer buffer;
+    core::ByteBuffer buffer;
     char opcode = 0;
 };
 

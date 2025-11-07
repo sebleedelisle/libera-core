@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace libera::etherdream {
+namespace libera::core {
 
 class ByteBuffer {
 public:
@@ -25,4 +25,4 @@ private:
     std::vector<std::uint8_t> buffer;
 };
 
-} // namespace libera::etherdream
+} // namespace libera::core

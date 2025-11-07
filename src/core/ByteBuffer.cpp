@@ -1,8 +1,8 @@
-#include "libera/etherdream/ByteBuffer.hpp"
+#include "libera/core/ByteBuffer.hpp"
 
 #include <stdexcept>
 
-namespace libera::etherdream {
+namespace libera::core {
 
 ByteBuffer::ByteBuffer() {
     buffer.reserve(1024 * 32); // 32 KB to start, grows automatically
@@ -37,4 +37,4 @@ void ByteBuffer::appendUInt32(std::uint32_t value) {
     buffer.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFFu));
 }
 
-} // namespace libera::etherdream
+} // namespace libera::core
