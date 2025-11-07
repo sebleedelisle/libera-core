@@ -28,7 +28,9 @@ using DacAck = EtherDreamDevice::DacAck;
 namespace ip = libera::net::asio::ip;
 namespace asio = libera::net::asio;
 
-EtherDreamDevice::EtherDreamDevice() = default;
+EtherDreamDevice::EtherDreamDevice() {
+    tcpClient.setDefaultTimeout(std::chrono::milliseconds{latencyMsValue()});
+}
 
 EtherDreamDevice::~EtherDreamDevice() {
     // Orderly shutdown: stop the worker thread and close the TCP connection.
@@ -41,11 +43,11 @@ EtherDreamDevice::connect(const ip::address& address, unsigned short port) {
 
     libera::net::tcp::endpoint endpoint(address, port);
 
-    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
-    std::error_code ec = tcpClient.connect(endpoint, timeout);
+    std::error_code ec = tcpClient.connect(endpoint);
     if (ec) {
         logError("[EtherDreamDevice] connect failed: ", ec.message(),
-                 " (to ", address.to_string(), ":", port, ")\n");
+                 " (to ", address.to_string(), ":", port, ")",
+                 " timeout=", tcpClient.defaultTimeout().count(), "ms\n");
         return unexpected(ec);
     }
 
@@ -82,6 +84,7 @@ void EtherDreamDevice::close() {
     // Future improvement: cancel outstanding async operations before closing.
     tcpClient.close();
     rememberedAddress.reset();
+    clearNetworkError();
 }
 
 bool EtherDreamDevice::isConnected() const {
@@ -139,6 +142,7 @@ void EtherDreamDevice::run() {
 
 expected<DacAck>
 EtherDreamDevice::waitForResponse(char command) {
+    
     if (!running) {
         return unexpected(std::make_error_code(std::errc::operation_canceled));
     }
@@ -146,13 +150,11 @@ EtherDreamDevice::waitForResponse(char command) {
         return unexpected(make_error_code(std::errc::not_connected));
     }
 
-    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
-
     // Local buffer sized for one ACK payload (22 bytes).
     std::array<std::uint8_t, 22> raw{};
 
     std::size_t bytesTransferred = 0;
-    if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeout, &bytesTransferred); ec) {
+    if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), &bytesTransferred); ec) {
         logError("[EtherDream] RX error ", ec.value(), ' ', ec.category().name(), " - ",
                   ec.message(), '\n');
         return unexpected(std::error_code(ec.value(), ec.category()));
@@ -192,11 +194,9 @@ EtherDreamDevice::sendCommand(char command) {
         return unexpected(std::make_error_code(std::errc::operation_canceled));
     }
 
-    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
-
     const uint8_t cmdByte = static_cast<uint8_t>(command);
-    logError("[EtherDream] TX '", command, "' (timeout ", timeout.count(), "ms)\n");
-    if (auto ec = tcpClient.write_all(&cmdByte, 1, timeout); ec) {
+    logError("[EtherDream] TX '", command, "' (timeout ", tcpClient.defaultTimeout().count(), "ms)\n");
+    if (auto ec = tcpClient.write_all(&cmdByte, 1); ec) {
         return unexpected(ec);
     }
     return waitForResponse(command);
@@ -205,17 +205,15 @@ EtherDreamDevice::sendCommand(char command) {
 expected<DacAck>
 EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
 
-    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
-
     EtherDreamCommand command;
     command.setBeginCommand(pointRate);
 
     logInfo("[EtherDream] TX 'b' (rate=", pointRate,
-             ", timeout ", timeout.count(), "ms)\n");
+             ", timeout ", tcpClient.defaultTimeout().count(), "ms)\n");
 
-    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeout); ec) {
+    if (auto ec = tcpClient.write_all(command.data(), command.size()); ec) {
         if (ec == asio::error::timed_out) {
-            logError("[EtherDream] begin write timeout after ", timeout.count(), "ms\n");
+            logError("[EtherDream] begin write timeout after ", tcpClient.defaultTimeout().count(), "ms\n");
         }
         return unexpected(ec);
     }
@@ -226,24 +224,22 @@ EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
 expected<DacAck>
 EtherDreamDevice::sendPointRate(std::uint16_t rate) {
 
-    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
-
     EtherDreamCommand command;
     command.setPointRateCommand(static_cast<std::uint32_t>(rate));
 
     logError("[EtherDream] TX 'q' (rate=", rate,
-              ", timeout ", timeout.count(), "ms)\n");
+              ", timeout ", tcpClient.defaultTimeout().count(), "ms)\n");
 
-    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeout); ec) {
+    if (auto ec = tcpClient.write_all(command.data(), command.size()); ec) {
         if (ec == asio::error::timed_out) {
-            logError("[EtherDream] point-rate write timeout after ", timeout.count(), "ms\n");
+            logError("[EtherDream] point-rate write timeout after ", tcpClient.defaultTimeout().count(), "ms\n");
         }
         return unexpected(ec);
     }
 
     auto ack = waitForResponse('q');
     if (!ack && ack.error() == asio::error::timed_out) {
-        logError("[EtherDream] point-rate ACK timed out after ", timeout.count(), "ms\n");
+        logError("[EtherDream] point-rate ACK timed out after ", tcpClient.defaultTimeout().count(), "ms\n");
     }
     if (ack) {
         rateChangePending = true;
@@ -254,7 +250,7 @@ EtherDreamDevice::sendPointRate(std::uint16_t rate) {
 std::size_t
 EtherDreamDevice::calculateMinimumPoints() {
 
-    const auto latency = latencyMillis.load(std::memory_order_relaxed);
+    const auto latency = latencyMsValue();
 
 
     if (lastKnownStatus.pointRate == 0 || latency <= 0) {
@@ -279,7 +275,7 @@ EtherDreamDevice::calculateMinimumPoints() {
 long long
 EtherDreamDevice::computeSleepDurationMS() {
     // Compute how many points must remain queued to satisfy the latency budget.
-    const auto latency = latencyMillis.load(std::memory_order_relaxed);
+    const auto latency = latencyMsValue();
     if (latency <= 0 || lastKnownStatus.pointRate == 0) {
         return 0;
     }
@@ -300,9 +296,14 @@ EtherDreamDevice::computeSleepDurationMS() {
 
 void EtherDreamDevice::handleNetworkFailure(std::string_view where,
                                      const std::error_code& ec) {
+    if (!running.load(std::memory_order_relaxed)) {
+        return; // Already stopping or stopped; no need to signal another failure.
+    }
+
     logError("[EtherDreamDevice] ", where, " failed: ", ec.message(), "\n");
     running = false;
     failureEncountered = true;
+    lastError = ec;
 }
 
 
@@ -334,7 +335,7 @@ core::PointFillRequest EtherDreamDevice::getFillRequest() {
     std::min<std::size_t>(calculateMinimumPoints(), freeSpace);
     
    
-    const long long latencyMs = latencyMillis.load(std::memory_order_relaxed);
+    const long long latencyMs = latencyMsValue();
 
     core::PointFillRequest req;
     req.maximumPointsRequired = freeSpace;
@@ -378,9 +379,7 @@ void EtherDreamDevice::sendPoints() {
     logError("[EtherDream] TX data: points=", pointsToSend.size(),
               " bytes=", command.size(), "\n");
 
-    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
-
-    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeout); ec) {
+    if (auto ec = tcpClient.write_all(command.data(), command.size()); ec) {
         handleNetworkFailure("stream write", ec);
         resetPoints();
         return;
@@ -502,6 +501,19 @@ int EtherDreamDevice::millisToPoints(double millis, std::uint32_t rate) {
     }
 
     return static_cast<int>(std::min<long long>(rounded, std::numeric_limits<int>::max()));
+}
+
+long long EtherDreamDevice::latencyMsValue() const {
+    auto value = latencyMillis.load(std::memory_order_relaxed);
+    return value < 0 ? 0 : value;
+}
+
+std::optional<std::error_code> EtherDreamDevice::lastNetworkError() const {
+    return lastError;
+}
+
+void EtherDreamDevice::clearNetworkError() {
+    lastError.reset();
 }
 
 } // namespace libera::etherdream

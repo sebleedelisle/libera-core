@@ -116,6 +116,10 @@ private:
     void sendBegin();
     void ensureTargetPointRate();
 
+    long long latencyMsValue() const;
+    std::optional<std::error_code> lastNetworkError() const;
+    void clearNetworkError();
+
     EtherDreamStatus lastKnownStatus{};
     std::chrono::steady_clock::time_point lastReceiveTime{};
     libera::net::TcpClient tcpClient;
@@ -127,6 +131,7 @@ private:
     std::size_t minBuffer = 256; // EtherDream 3+ cannot report below this buffer depth.
 
     bool failureEncountered = false;
+    std::optional<std::error_code> lastError;
 };
 
 } // namespace libera::etherdream
