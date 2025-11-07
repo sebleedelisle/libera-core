@@ -110,3 +110,7 @@ oldcode/dacs/LaserDockNetwork/ofxLaserDacLaserDockNetResponse.cpp
 oldcode/dacs/LaserDockNetwork/ofxLaserDacLaserDockNetResponse.h
 oldcode/dacs/LaserDockNetwork/ofxLaserDacManagerLaserDockNet.cpp
 oldcode/dacs/LaserDockNetwork/ofxLaserDacManagerLaserDockNet.h
+build-asan/smoke_controller
+build-asan/test_etherdream_reconnect
+build-asan/test_etherdream_status
+build-asan/libera-main
