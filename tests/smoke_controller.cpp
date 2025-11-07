@@ -1,8 +1,9 @@
 #include "libera/core/Dummy/DummyController.hpp"
-#include "libera/core/Log.hpp"
+#include "libera/log/Log.hpp"
 #include <vector>
 #include <chrono>
 
+using namespace libera;
 using namespace libera::core;
 
 int main() {
@@ -22,6 +23,6 @@ int main() {
     req.estimatedFirstPointRenderTime = std::chrono::steady_clock::now();
 
     const bool ok = ctl.requestPoints(req);
-    libera::core::logInfof("Smoke test: requestPoints returned ", (ok ? "true" : "false"), "\n");
+    logInfo("Smoke test: requestPoints returned ", (ok ? "true" : "false"), "\n");
     return ok ? 0 : 1;
 }

@@ -3,7 +3,7 @@
 #include "libera/net/Deadline.hpp"
 #include "libera/net/TimeoutConfig.hpp"
 #include "libera/net/NetService.hpp"
-#include "libera/core/Log.hpp"
+#include "libera/log/Log.hpp"
 
 #include <chrono>
 #include <memory>
@@ -125,7 +125,7 @@ public:
     }
 
         void close() {
-            libera::core::logInfo("[TcpClient] close()\n");
+            logInfo("[TcpClient] close()\n");
         if (!socket_.is_open()) return;
         std::error_code ec;
         // Proactively cancel outstanding operations first (pattern: cancel -> shutdown -> close).

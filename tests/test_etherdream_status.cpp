@@ -1,19 +1,20 @@
 #include "libera/etherdream/EtherDreamResponse.hpp"
-#include "libera/core/Log.hpp"
+#include "libera/log/Log.hpp"
 
 #include <array>
 #include <cstdint>
 
+using namespace libera;
 using namespace libera::etherdream;
 
 static int g_failures = 0;
 
 #define ASSERT_TRUE(cond, msg) \
-    do { if (!(cond)) { libera::core::logErrorf("ASSERT TRUE FAILED: ", (msg), \
+    do { if (!(cond)) { logError("ASSERT TRUE FAILED: ", (msg), \
         "  @ ", __FILE__, ":", __LINE__, "\n"); ++g_failures; } } while(0)
 
 #define ASSERT_EQ(a,b,msg) \
-    do { auto _va=(a); auto _vb=(b); if (!((_va)==(_vb))) { libera::core::logErrorf("ASSERT EQ FAILED: ", (msg), \
+    do { auto _va=(a); auto _vb=(b); if (!((_va)==(_vb))) { logError("ASSERT EQ FAILED: ", (msg), \
         "  (", +_va, " != ", +_vb, ")" \
         "  @ ", __FILE__, ":", __LINE__, "\n"); ++g_failures; } } while(0)
 
@@ -58,9 +59,9 @@ int main() {
     testRejectShort();
 
     if (g_failures) {
-        libera::core::logErrorf("Tests failed: ", g_failures, " failure(s)\n");
+        logError("Tests failed: ", g_failures, " failure(s)\n");
         return 1;
     }
-    libera::core::logInfo("EtherDreamResponse tests passed.\n");
+    logInfo("EtherDreamResponse tests passed.\n");
     return 0;
 }

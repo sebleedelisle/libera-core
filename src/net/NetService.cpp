@@ -1,5 +1,5 @@
 #include "libera/net/NetService.hpp"
-#include "libera/core/Log.hpp"
+#include "libera/log/Log.hpp"
 
 namespace libera::net {
 
@@ -15,7 +15,7 @@ NetService::NetService()
 , work_guard_(asio::make_work_guard(*io_))
 , t_([this]{ io_->run(); })
 {
-    libera::core::logInfo("Creating NetService object\n");
+    logInfo("Creating NetService object\n");
 }
 
 NetService::~NetService() {

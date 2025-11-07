@@ -1,6 +1,6 @@
 #pragma once
 #include "libera/net/NetConfig.hpp"
-#include "libera/core/Log.hpp"
+#include "libera/log/Log.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -85,8 +85,8 @@ std::error_code with_deadline(
             notify = true;
         }
         if (notify) {
-            libera::core::logInfof("[with_deadline] timeout fired after ",
-                                   timeout.count(), "ms\n");
+            logInfo("[with_deadline] timeout fired after ",
+                    timeout.count(), "ms\n");
             cancel();
             st->cv.notify_one();
         }

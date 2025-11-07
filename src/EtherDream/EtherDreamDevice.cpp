@@ -4,7 +4,7 @@
 #include "libera/etherdream/EtherDreamDevice.hpp"
 
 #include "libera/etherdream/EtherDreamConfig.hpp"
-#include "libera/core/Log.hpp"
+#include "libera/log/Log.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,10 +24,6 @@ namespace libera::etherdream {
 
 using libera::expected;
 using libera::unexpected;
-using libera::core::logError;
-using libera::core::logErrorf;
-using libera::core::logInfo;
-using libera::core::logInfof;
 using DacAck = EtherDreamDevice::DacAck;
 namespace ip = libera::net::asio::ip;
 namespace asio = libera::net::asio;
@@ -47,8 +43,8 @@ EtherDreamDevice::connect(const ip::address& address, unsigned short port) {
 
     std::error_code ec = tcpClient.connect(endpoint, latencyMillis);
     if (ec) {
-        logErrorf("[EtherDreamDevice] connect failed: ", ec.message(),
-                  " (to ", address.to_string(), ":", port, ")\n");
+        logError("[EtherDreamDevice] connect failed: ", ec.message(),
+                 " (to ", address.to_string(), ":", port, ")\n");
         return unexpected(ec);
     }
 
@@ -56,8 +52,8 @@ EtherDreamDevice::connect(const ip::address& address, unsigned short port) {
 
     rememberedAddress = address;
 
-    logInfof("[EtherDreamDevice] connected to ",
-             address.to_string(), ":", port, "\n");
+    logInfo("[EtherDreamDevice] connected to ",
+            address.to_string(), ":", port, "\n");
 
     return {};
 }
@@ -67,7 +63,7 @@ EtherDreamDevice::connect(const std::string& addressstring, unsigned short port)
     std::error_code ec;
     auto ip = libera::net::asio::ip::make_address(addressstring, ec);
     if (ec) {
-        logErrorf("Invalid IP: ", ec.message(), "\n");
+        logError("Invalid IP: ", ec.message(), "\n");
         return unexpected(ec);
     }
 
@@ -156,14 +152,14 @@ EtherDreamDevice::waitForResponse(char command) {
 
     std::size_t bytesTransferred = 0;
     if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeoutMillis, &bytesTransferred); ec) {
-        logErrorf("[EtherDream] RX error ", ec.value(), ' ', ec.category().name(), " - ",
+        logError("[EtherDream] RX error ", ec.value(), ' ', ec.category().name(), " - ",
                   ec.message(), '\n');
         return unexpected(std::error_code(ec.value(), ec.category()));
     }
 
     EtherDreamResponse response;
     if (!response.decode(raw.data(), raw.size())) {
-        logErrorf("[EtherDreamDevice] Failed to decode ACK for command '", command, "'\n");
+        logError("[EtherDreamDevice] Failed to decode ACK for command '", command, "'\n");
         return unexpected(make_error_code(std::errc::protocol_error));
     }
 
@@ -173,12 +169,12 @@ EtherDreamDevice::waitForResponse(char command) {
     // Update begin/clear/prepare flags based on the latest status frame.
     updatePlaybackRequirements(response.status, ackMatched);
 
-    logInfof("[EtherDream] RX '", static_cast<char>(response.response),
+    logInfo("[EtherDream] RX '", static_cast<char>(response.response),
              "' for '", command, "' | ", response.status.describe(), '\n',
              "           hex: ", EtherDreamStatus::toHexLine(raw.data(), raw.size()), '\n');
 
     if (!ackMatched) {
-        logErrorf("[EtherDream] unexpected ACK: expected 'a' for '", command,
+        logError("[EtherDream] unexpected ACK: expected 'a' for '", command,
                   "' but got '", static_cast<char>(response.response),
                   "' for '", static_cast<char>(response.command), "'\n",
                   "           hex: ", EtherDreamStatus::toHexLine(raw.data(), raw.size()), '\n');
@@ -198,7 +194,7 @@ EtherDreamDevice::sendCommand(char command) {
     const long long timeoutMillis = latencyMillis;
     
     const uint8_t cmdByte = static_cast<uint8_t>(command);
-    logErrorf("[EtherDream] TX '", command, "' (timeout ", timeoutMillis, "ms)\n");
+    logError("[EtherDream] TX '", command, "' (timeout ", timeoutMillis, "ms)\n");
     if (auto ec = tcpClient.write_all(&cmdByte, 1, timeoutMillis); ec) {
         return unexpected(ec);
     }
@@ -213,12 +209,12 @@ EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
     EtherDreamCommand command;
     command.setBeginCommand(pointRate);
 
-    logInfof("[EtherDream] TX 'b' (rate=", pointRate,
+    logInfo("[EtherDream] TX 'b' (rate=", pointRate,
              ", timeout ", timeoutMillis, "ms)\n");
 
     if (auto ec = tcpClient.write_all(command.data(), command.size(), timeoutMillis); ec) {
         if (ec == asio::error::timed_out) {
-            logErrorf("[EtherDream] begin write timeout after ", timeoutMillis, "ms\n");
+            logError("[EtherDream] begin write timeout after ", timeoutMillis, "ms\n");
         }
         return unexpected(ec);
     }
@@ -234,19 +230,19 @@ EtherDreamDevice::sendPointRate(std::uint16_t rate) {
     EtherDreamCommand command;
     command.setPointRateCommand(static_cast<std::uint32_t>(rate));
 
-    logErrorf("[EtherDream] TX 'q' (rate=", rate,
+    logError("[EtherDream] TX 'q' (rate=", rate,
               ", timeout ", timeoutMillis, "ms)\n");
 
     if (auto ec = tcpClient.write_all(command.data(), command.size(), timeoutMillis); ec) {
         if (ec == asio::error::timed_out) {
-            logErrorf("[EtherDream] point-rate write timeout after ", timeoutMillis, "ms\n");
+            logError("[EtherDream] point-rate write timeout after ", timeoutMillis, "ms\n");
         }
         return unexpected(ec);
     }
 
     auto ack = waitForResponse('q');
     if (!ack && ack.error() == asio::error::timed_out) {
-        logErrorf("[EtherDream] point-rate ACK timed out after ", timeoutMillis, "ms\n");
+        logError("[EtherDream] point-rate ACK timed out after ", timeoutMillis, "ms\n");
     }
     if (ack) {
         rateChangePending = true;
@@ -303,7 +299,7 @@ EtherDreamDevice::computeSleepDurationMS() {
 
 void EtherDreamDevice::handleNetworkFailure(std::string_view where,
                                      const std::error_code& ec) {
-    logErrorf("[EtherDreamDevice] ", where, " failed: ", ec.message(), "\n");
+    logError("[EtherDreamDevice] ", where, " failed: ", ec.message(), "\n");
     running = false;
     failureEncountered = true;
 }
@@ -344,7 +340,7 @@ core::PointFillRequest EtherDreamDevice::getFillRequest() {
     req.minimumPointsRequired = minimumPointsRequired;
     req.estimatedFirstPointRenderTime =
         std::chrono::steady_clock::now() + std::chrono::milliseconds{latencyMs}; // TODO: incorporate remaining buffer delay.
-    logInfof("[EtherDreamDevice Point fill request ", req.minimumPointsRequired,
+    logInfo("[EtherDreamDevice Point fill request ", req.minimumPointsRequired,
              ' ', req.maximumPointsRequired, "\n");
 
     pointsToSend.clear();
@@ -378,7 +374,7 @@ void EtherDreamDevice::sendPoints() {
         return;
     }
 
-    logErrorf("[EtherDream] TX data: points=", pointsToSend.size(),
+    logError("[EtherDream] TX data: points=", pointsToSend.size(),
               " bytes=", command.size(), "\n");
 
     const auto timeoutMS = latencyMillis.load(std::memory_order_relaxed);
@@ -471,7 +467,7 @@ void EtherDreamDevice::ensureTargetPointRate() {
 
 void EtherDreamDevice::sleepUntilNextPoints() {
     long long durationMS = computeSleepDurationMS();
-    logInfof("[EtherDreamDevice] Sleeping for ", durationMS, "\n");
+    logInfo("[EtherDreamDevice] Sleeping for ", durationMS, "\n");
     std::this_thread::sleep_for(std::chrono::milliseconds{durationMS});
 }
 

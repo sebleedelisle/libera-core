@@ -1,5 +1,5 @@
 #include "libera/core/LaserDeviceBase.hpp"
-#include "libera/core/Log.hpp"
+#include "libera/log/Log.hpp"
 #include <cassert>
 
 namespace libera::core {
