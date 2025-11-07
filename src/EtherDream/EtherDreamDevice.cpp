@@ -41,7 +41,8 @@ EtherDreamDevice::connect(const ip::address& address, unsigned short port) {
 
     libera::net::tcp::endpoint endpoint(address, port);
 
-    std::error_code ec = tcpClient.connect(endpoint, latencyMillis);
+    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
+    std::error_code ec = tcpClient.connect(endpoint, timeout);
     if (ec) {
         logError("[EtherDreamDevice] connect failed: ", ec.message(),
                  " (to ", address.to_string(), ":", port, ")\n");
@@ -145,13 +146,13 @@ EtherDreamDevice::waitForResponse(char command) {
         return unexpected(make_error_code(std::errc::not_connected));
     }
 
-    const long long timeoutMillis = latencyMillis;
+    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
 
     // Local buffer sized for one ACK payload (22 bytes).
     std::array<std::uint8_t, 22> raw{};
 
     std::size_t bytesTransferred = 0;
-    if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeoutMillis, &bytesTransferred); ec) {
+    if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), timeout, &bytesTransferred); ec) {
         logError("[EtherDream] RX error ", ec.value(), ' ', ec.category().name(), " - ",
                   ec.message(), '\n');
         return unexpected(std::error_code(ec.value(), ec.category()));
@@ -191,11 +192,11 @@ EtherDreamDevice::sendCommand(char command) {
         return unexpected(std::make_error_code(std::errc::operation_canceled));
     }
 
-    const long long timeoutMillis = latencyMillis;
-    
+    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
+
     const uint8_t cmdByte = static_cast<uint8_t>(command);
-    logError("[EtherDream] TX '", command, "' (timeout ", timeoutMillis, "ms)\n");
-    if (auto ec = tcpClient.write_all(&cmdByte, 1, timeoutMillis); ec) {
+    logError("[EtherDream] TX '", command, "' (timeout ", timeout.count(), "ms)\n");
+    if (auto ec = tcpClient.write_all(&cmdByte, 1, timeout); ec) {
         return unexpected(ec);
     }
     return waitForResponse(command);
@@ -204,17 +205,17 @@ EtherDreamDevice::sendCommand(char command) {
 expected<DacAck>
 EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
 
-    const long long timeoutMillis = latencyMillis;
+    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
 
     EtherDreamCommand command;
     command.setBeginCommand(pointRate);
 
     logInfo("[EtherDream] TX 'b' (rate=", pointRate,
-             ", timeout ", timeoutMillis, "ms)\n");
+             ", timeout ", timeout.count(), "ms)\n");
 
-    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeoutMillis); ec) {
+    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeout); ec) {
         if (ec == asio::error::timed_out) {
-            logError("[EtherDream] begin write timeout after ", timeoutMillis, "ms\n");
+            logError("[EtherDream] begin write timeout after ", timeout.count(), "ms\n");
         }
         return unexpected(ec);
     }
@@ -224,25 +225,25 @@ EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
 
 expected<DacAck>
 EtherDreamDevice::sendPointRate(std::uint16_t rate) {
-    
-    const long long timeoutMillis = latencyMillis;
+
+    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
 
     EtherDreamCommand command;
     command.setPointRateCommand(static_cast<std::uint32_t>(rate));
 
     logError("[EtherDream] TX 'q' (rate=", rate,
-              ", timeout ", timeoutMillis, "ms)\n");
+              ", timeout ", timeout.count(), "ms)\n");
 
-    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeoutMillis); ec) {
+    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeout); ec) {
         if (ec == asio::error::timed_out) {
-            logError("[EtherDream] point-rate write timeout after ", timeoutMillis, "ms\n");
+            logError("[EtherDream] point-rate write timeout after ", timeout.count(), "ms\n");
         }
         return unexpected(ec);
     }
 
     auto ack = waitForResponse('q');
     if (!ack && ack.error() == asio::error::timed_out) {
-        logError("[EtherDream] point-rate ACK timed out after ", timeoutMillis, "ms\n");
+        logError("[EtherDream] point-rate ACK timed out after ", timeout.count(), "ms\n");
     }
     if (ack) {
         rateChangePending = true;
@@ -377,9 +378,9 @@ void EtherDreamDevice::sendPoints() {
     logError("[EtherDream] TX data: points=", pointsToSend.size(),
               " bytes=", command.size(), "\n");
 
-    const auto timeoutMS = latencyMillis.load(std::memory_order_relaxed);
+    const auto timeout = std::chrono::milliseconds{latencyMillis.load(std::memory_order_relaxed)};
 
-    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeoutMS); ec) {
+    if (auto ec = tcpClient.write_all(command.data(), command.size(), timeout); ec) {
         handleNetworkFailure("stream write", ec);
         resetPoints();
         return;

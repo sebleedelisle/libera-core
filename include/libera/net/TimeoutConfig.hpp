@@ -5,26 +5,50 @@
 namespace libera::net {
 
 /**
- * @brief Stores and exposes a default timeout for networking operations.
- *
- * Helpers such as `TcpClient` fall back to this value when callers do not
- * provide an explicit timeout.
+ * @brief Stores the global timeout configuration for synchronous helpers.
  */
-inline long long& default_timeout_storage() {
-    static long long timeout{1000}; // sensible default = 1s
-    return timeout;
-}
+class TimeoutConfig {
+public:
+    using duration = std::chrono::milliseconds;
 
-inline void set_default_timeout(std::chrono::milliseconds timeout) {
-    default_timeout_storage() = timeout.count();
-}
+    /** Set the process-wide default timeout (clamped to >= 0). */
+    static void setDefault(duration timeout) {
+        storage() = sanitize(timeout);
+    }
 
-inline void set_default_timeout_ms(long long timeout_ms) {
-    default_timeout_storage() = timeout_ms;
-}
+    /** Access the current process-wide default timeout. */
+    static duration defaultTimeout() {
+        return storage();
+    }
 
-inline long long default_timeout() {
-    return default_timeout_storage();
-}
+    /** RAII helper that temporarily overrides the default timeout. */
+    class ScopedOverride {
+    public:
+        explicit ScopedOverride(duration timeout)
+        : previous_(storage()) {
+            storage() = sanitize(timeout);
+        }
+
+        ScopedOverride(const ScopedOverride&) = delete;
+        ScopedOverride& operator=(const ScopedOverride&) = delete;
+
+        ~ScopedOverride() {
+            storage() = previous_;
+        }
+
+    private:
+        duration previous_;
+    };
+
+private:
+    static duration sanitize(duration timeout) {
+        return timeout.count() < 0 ? duration::zero() : timeout;
+    }
+
+    static duration& storage() {
+        static duration timeout{duration{1000}}; // default = 1s
+        return timeout;
+    }
+};
 
 } // namespace libera::net

@@ -8,7 +8,7 @@
 using namespace libera;
 
 int main() {
-    // libera::net::set_default_timeout_ms(5000); // Optional global timeout override.
+    // libera::net::TimeoutConfig::setDefault(std::chrono::seconds{5}); // Optional global timeout override.
 
     etherdream::EtherDreamDevice etherdream;
 
