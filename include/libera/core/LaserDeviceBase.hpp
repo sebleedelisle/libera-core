@@ -104,7 +104,7 @@ public:
      * Derived devices use this to size refill batches and tune socket timeouts.
      * Values less than 1 ms are clamped to 1 to avoid zero-length deadlines.
      */
-    void setLatency(long long latencyMillisValue);
+    virtual void setLatency(long long latencyMillisValue);
 
     /**
      * @brief Retrieve the currently configured latency budget in milliseconds.

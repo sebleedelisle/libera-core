@@ -11,9 +11,10 @@ constexpr std::uint16_t RATE_CHANGE_BIT = 0x8000u;
 }
 
 void EtherDreamCommand::setDataCommand(std::uint16_t pointCount) {
-    buffer.clear();
+    reset();
     buffer.appendChar('d');
     buffer.appendUInt16(pointCount);
+    opcode = 'd';
 }
 
 void EtherDreamCommand::addPoint(const core::LaserPoint& point, bool setRateChangeFlag) {
@@ -30,16 +31,29 @@ void EtherDreamCommand::addPoint(const core::LaserPoint& point, bool setRateChan
 }
 
 void EtherDreamCommand::setBeginCommand(std::uint32_t pointRate) {
-    buffer.clear();
+    reset();
     buffer.appendChar('b');
     buffer.appendUInt16(0); // reserved flags
     buffer.appendUInt32(pointRate);
+    opcode = 'b';
 }
 
 void EtherDreamCommand::setPointRateCommand(std::uint32_t pointRate) {
-    buffer.clear();
+    reset();
     buffer.appendChar('q');
     buffer.appendUInt32(pointRate);
+    opcode = 'q';
+}
+
+void EtherDreamCommand::setSingleByteCommand(char opcodeValue) {
+    reset();
+    buffer.appendChar(opcodeValue);
+    opcode = opcodeValue;
+}
+
+void EtherDreamCommand::reset() {
+    buffer.clear();
+    opcode = 0;
 }
 
 std::int16_t EtherDreamCommand::encodeCoordinate(float value) noexcept {

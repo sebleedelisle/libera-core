@@ -29,13 +29,20 @@ namespace ip = libera::net::asio::ip;
 namespace asio = libera::net::asio;
 
 EtherDreamDevice::EtherDreamDevice() {
-    tcpClient.setDefaultTimeout(std::chrono::milliseconds{latencyMsValue()});
+    setLatency(latencyMsValue());
 }
 
 EtherDreamDevice::~EtherDreamDevice() {
     // Orderly shutdown: stop the worker thread and close the TCP connection.
     stop();
     close();
+}
+
+void EtherDreamDevice::setLatency(long long latencyMillisValue) {
+    LaserDeviceBase::setLatency(latencyMillisValue);
+    const auto timeout = std::chrono::milliseconds{latencyMsValue()};
+    tcpClient.setDefaultTimeout(timeout);
+    tcpClient.setConnectTimeout(timeout * 4);
 }
 
 expected<void>
@@ -105,7 +112,7 @@ void EtherDreamDevice::run() {
 
     auto initialAck = waitForResponse('?');
     if (!initialAck) {
-        if (auto pingAck = sendCommand('?'); !pingAck) {
+        if (auto pingAck = sendPing(); !pingAck) {
             handleNetworkFailure("initial ping", pingAck.error());
             return;
         }
@@ -188,62 +195,45 @@ EtherDreamDevice::waitForResponse(char command) {
 }
 
 expected<DacAck>
-EtherDreamDevice::sendCommand(char command) {
+EtherDreamDevice::sendCommand() {
 
     if (!running) {
         return unexpected(std::make_error_code(std::errc::operation_canceled));
     }
 
-    const uint8_t cmdByte = static_cast<uint8_t>(command);
-    logError("[EtherDream] TX '", command, "' (timeout ", tcpClient.defaultTimeout().count(), "ms)\n");
-    if (auto ec = tcpClient.write_all(&cmdByte, 1); ec) {
-        return unexpected(ec);
+    if (!commandBuffer.isReady()) {
+        return unexpected(make_error_code(std::errc::invalid_argument));
     }
-    return waitForResponse(command);
-}
 
-expected<DacAck>
-EtherDreamDevice::sendBeginCommand(std::uint32_t pointRate) {
+    const char opcode = commandBuffer.commandOpcode();
 
-    EtherDreamCommand command;
-    command.setBeginCommand(pointRate);
-
-    logInfo("[EtherDream] TX 'b' (rate=", pointRate,
-             ", timeout ", tcpClient.defaultTimeout().count(), "ms)\n");
-
-    if (auto ec = tcpClient.write_all(command.data(), command.size()); ec) {
-        if (ec == asio::error::timed_out) {
-            logError("[EtherDream] begin write timeout after ", tcpClient.defaultTimeout().count(), "ms\n");
-        }
+    if (auto ec = tcpClient.write_all(commandBuffer.data(), commandBuffer.size()); ec) {
+        commandBuffer.reset();
         return unexpected(ec);
     }
 
-    return waitForResponse('b');
+    auto ack = waitForResponse(opcode);
+    commandBuffer.reset();
+    return ack;
 }
 
 expected<DacAck>
 EtherDreamDevice::sendPointRate(std::uint16_t rate) {
 
-    EtherDreamCommand command;
-    command.setPointRateCommand(static_cast<std::uint32_t>(rate));
+    commandBuffer.setPointRateCommand(static_cast<std::uint32_t>(rate));
 
     logError("[EtherDream] TX 'q' (rate=", rate,
               ", timeout ", tcpClient.defaultTimeout().count(), "ms)\n");
 
-    if (auto ec = tcpClient.write_all(command.data(), command.size()); ec) {
-        if (ec == asio::error::timed_out) {
-            logError("[EtherDream] point-rate write timeout after ", tcpClient.defaultTimeout().count(), "ms\n");
+    auto ack = sendCommand();
+    if (!ack) {
+        if (ack.error() == asio::error::timed_out) {
+            logError("[EtherDream] point-rate command timed out after ", tcpClient.defaultTimeout().count(), "ms\n");
         }
-        return unexpected(ec);
+        return ack;
     }
 
-    auto ack = waitForResponse('q');
-    if (!ack && ack.error() == asio::error::timed_out) {
-        logError("[EtherDream] point-rate ACK timed out after ", tcpClient.defaultTimeout().count(), "ms\n");
-    }
-    if (ack) {
-        rateChangePending = true;
-    }
+    rateChangePending = true;
     return ack;
 }
 
@@ -360,34 +350,27 @@ void EtherDreamDevice::sendPoints() {
     }
 
     const bool injectRateChange = rateChangePending;
-    EtherDreamCommand command;
     const std::uint16_t pointCount =  static_cast<std::uint16_t>(pointsToSend.size());
 
-    command.setDataCommand(pointCount);
+    commandBuffer.setDataCommand(pointCount);
 
     for (std::size_t idx = 0; idx < pointCount; ++idx) {
         const bool setRateBit = injectRateChange && idx == 0;
-        command.addPoint(pointsToSend[idx], setRateBit);
+        commandBuffer.addPoint(pointsToSend[idx], setRateBit);
     }
 
-    if (command.size() == 0) {
+    if (commandBuffer.size() == 0) {
         handleNetworkFailure("packet serialization", std::make_error_code(std::errc::invalid_argument));
         resetPoints();
         return;
     }
 
     logError("[EtherDream] TX data: points=", pointsToSend.size(),
-              " bytes=", command.size(), "\n");
+              " bytes=", commandBuffer.size(), "\n");
 
-    if (auto ec = tcpClient.write_all(command.data(), command.size()); ec) {
-        handleNetworkFailure("stream write", ec);
-        resetPoints();
-        return;
-    }
-
-    auto dataAck = waitForResponse('d');
+    auto dataAck = sendCommand();
     if (!dataAck) {
-        handleNetworkFailure("waiting for data ACK", dataAck.error());
+        handleNetworkFailure("data command", dataAck.error());
         resetPoints();
         return;
     }
@@ -401,23 +384,36 @@ void EtherDreamDevice::sendPoints() {
 
 void EtherDreamDevice::sendClear() {
     logError("[EtherDream] clear required -> send 'c'\n");
-    if (auto ack = sendCommand('c'); !ack) {
+    commandBuffer.setSingleByteCommand('c');
+    if (auto ack = sendCommand(); !ack) {
         handleNetworkFailure("clear command", ack.error());
     }
 }
 
 void EtherDreamDevice::sendPrepare() {
     logError("[EtherDream] prepare required -> send 'p'\n");
-    if (auto ack = sendCommand('p'); !ack) {
+    commandBuffer.setSingleByteCommand('p');
+    if (auto ack = sendCommand(); !ack) {
         handleNetworkFailure("prepare command", ack.error());
     }
 }
 
 void EtherDreamDevice::sendBegin() {
     logError("[EtherDream] begin required -> send 'b'\n");
-    if (auto ack = sendBeginCommand(config::ETHERDREAM_TARGET_POINT_RATE); !ack) {
+    logInfo("[EtherDream] TX 'b' (rate=", config::ETHERDREAM_TARGET_POINT_RATE,
+            ", timeout ", tcpClient.defaultTimeout().count(), "ms)\n");
+    commandBuffer.setBeginCommand(config::ETHERDREAM_TARGET_POINT_RATE);
+    if (auto ack = sendCommand(); !ack) {
+        if (ack.error() == asio::error::timed_out) {
+            logError("[EtherDream] begin write timeout after ", tcpClient.defaultTimeout().count(), "ms\n");
+        }
         handleNetworkFailure("begin command", ack.error());
     }
+}
+
+expected<DacAck> EtherDreamDevice::sendPing() {
+    commandBuffer.setSingleByteCommand('?');
+    return sendCommand();
 }
 
 std::uint16_t EtherDreamDevice::estimateBufferFullness() const {

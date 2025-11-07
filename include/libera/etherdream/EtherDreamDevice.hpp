@@ -35,6 +35,8 @@ public:
     EtherDreamDevice();
     ~EtherDreamDevice();
 
+    void setLatency(long long latencyMillisValue) override;
+
     // non-copyable / non-movable
     EtherDreamDevice(const EtherDreamDevice&) = delete;
     EtherDreamDevice& operator=(const EtherDreamDevice&) = delete;
@@ -80,12 +82,9 @@ private:
     expected<DacAck>
     waitForResponse(char command);
 
-    /// Send a single-byte command and synchronously wait for its ACK.
+    /// Send the prepared command stored in commandBuffer_ and wait for its ACK.
     expected<DacAck>
-    sendCommand(char command);
-
-    expected<DacAck>
-    sendBeginCommand(std::uint32_t pointRate);
+    sendCommand();
 
     /// Issue the point-rate command ('q') and return the associated ACK.
     expected<DacAck>
@@ -114,11 +113,14 @@ private:
     void sendClear();
     void sendPrepare();
     void sendBegin();
+    expected<DacAck> sendPing();
     void ensureTargetPointRate();
 
     long long latencyMsValue() const;
     std::optional<std::error_code> lastNetworkError() const;
     void clearNetworkError();
+
+    EtherDreamCommand commandBuffer;
 
     EtherDreamStatus lastKnownStatus{};
     std::chrono::steady_clock::time_point lastReceiveTime{};

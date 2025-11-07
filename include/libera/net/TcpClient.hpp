@@ -29,6 +29,7 @@ public:
     , socket_(*io_)
     , strand_(asio::make_strand(*io_))
     , defaultTimeout_(TimeoutConfig::defaultTimeout())
+    , connectTimeout_(TimeoutConfig::defaultTimeout())
     {}
 
     void setDefaultTimeout(duration timeout) {
@@ -36,6 +37,12 @@ public:
     }
 
     duration defaultTimeout() const { return defaultTimeout_; }
+
+    void setConnectTimeout(duration timeout) {
+        connectTimeout_ = sanitize(timeout);
+    }
+
+    duration connectTimeout() const { return connectTimeout_; }
 
     // Access to the socket (non-const)
     tcp::socket& socket() { return socket_; }
@@ -50,7 +57,7 @@ public:
     }
 
     std::error_code connect(const tcp::endpoint& endpoint) {
-        return connect(endpoint, defaultTimeout_);
+        return connect(endpoint, connectTimeout_);
     }
 
     template <typename Endpoints>
@@ -67,7 +74,7 @@ public:
 
     template <typename Endpoints>
     std::error_code connect(const Endpoints& endpoints) {
-        return connect(endpoints, defaultTimeout_);
+        return connect(endpoints, connectTimeout_);
     }
 
     // Overload 2: connect from resolver results (entries have .endpoint())
@@ -89,7 +96,7 @@ public:
     template <typename Results>
     std::error_code connect(Results results,
                        decltype(std::declval<typename Results::value_type>().endpoint(), 0) = 0) {
-        return connect(results, defaultTimeout_);
+        return connect(results, connectTimeout_);
     }
 
     std::error_code read_exact(void* buf, std::size_t n, duration timeout,
@@ -190,6 +197,7 @@ private:
     tcp::socket socket_;
     asio::strand<asio::io_context::executor_type> strand_;
     duration defaultTimeout_;
+    duration connectTimeout_;
 };
 
 } // namespace libera::net
