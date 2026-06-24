@@ -348,6 +348,9 @@ protected:
     PointRequestMetrics pointRequestMetrics{};
     // Stores 1/10,000th of a second units so we match legacy colour-shift semantics.
     std::atomic<double> scannerSyncTime{2.0}; // in 1/10,000 of a second
+    // Arm/disarm can reset this delay line from the app thread while transport
+    // workers are applying scanner sync, so every deque mutation is serialized.
+    mutable std::mutex scannerSyncColourDelayLineMutex;
     std::deque<LaserPoint> scannerSyncColourDelayLine;
     std::atomic<int> startupBlankPointsRemaining{0};
     std::atomic<int> shutdownBlankPointsRemaining{0};

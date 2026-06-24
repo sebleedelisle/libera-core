@@ -1,7 +1,9 @@
 #include "libera/core/LaserControllerStreaming.hpp"
 #include "libera/log/Log.hpp"
 
+#include <atomic>
 #include <cstddef>
+#include <thread>
 #include <vector>
 
 using namespace libera;
@@ -141,7 +143,6 @@ void testZeroSyncNoDelay() {
     request.maximumPointsRequired = 5;
 
     ASSERT_TRUE(controller.requestPoints(request), "requestPoints succeeds");
-    const auto& batch = controller.lastBatch();
 
     // With zero sync, colour should pass through unmodified (after startup blank).
     // But point 0 is blanked by the startup blank (1ms = 10 points at 10kpps).
@@ -192,6 +193,56 @@ void testDisarmedForcesBlack() {
     }
 }
 
+void testArmToggleDoesNotRaceScannerSyncDelayLine() {
+    ScannerSyncHarness controller;
+    controller.setPointRate(30000);
+    controller.setScannerSync(20.0);
+    controller.setArmed(true);
+
+    controller.setRequestPointsCallback(
+        [](const PointFillRequest& req, std::vector<LaserPoint>& out) {
+            for (std::size_t i = 0; i < req.maximumPointsRequired; ++i) {
+                LaserPoint p{};
+                p.x = static_cast<float>(i) * 0.01f;
+                p.y = static_cast<float>(i) * -0.01f;
+                p.r = 1.0f;
+                p.g = 0.5f;
+                p.b = 0.25f;
+                out.push_back(p);
+            }
+        });
+
+    PointFillRequest request{};
+    request.minimumPointsRequired = 128;
+    request.maximumPointsRequired = 128;
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> requestOk{true};
+
+    std::thread requestThread([&]() {
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        for (int i = 0; i < 2000; ++i) {
+            if (!controller.requestPoints(request)) {
+                requestOk.store(false, std::memory_order_relaxed);
+            }
+        }
+    });
+
+    start.store(true, std::memory_order_release);
+    for (int i = 0; i < 2000; ++i) {
+        controller.setArmed((i % 2) == 0);
+    }
+
+    requestThread.join();
+
+    ASSERT_TRUE(requestOk.load(std::memory_order_relaxed),
+                "requestPoints should keep succeeding while arm state changes");
+    ASSERT_TRUE(controller.requestPoints(request),
+                "requestPoints should still succeed after concurrent arm toggles");
+}
+
 } // namespace
 
 int main() {
@@ -201,6 +252,7 @@ int main() {
     testColourDelayShiftsRGB();
     testZeroSyncNoDelay();
     testDisarmedForcesBlack();
+    testArmToggleDoesNotRaceScannerSyncDelayLine();
 
     if (g_failures) {
         logError("Tests failed", g_failures, "failure(s)");
