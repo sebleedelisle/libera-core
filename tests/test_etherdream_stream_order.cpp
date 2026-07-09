@@ -289,6 +289,8 @@ private:
         bool clearRequiredAfterDataNak = false;
         std::size_t localBeginCount = 0;
         std::uint16_t bufferedPoints = 0;
+        std::uint32_t activePointRate = 0;
+        bool playing = false;
 
         while (running.load()) {
             std::uint8_t opcode = 0;
@@ -314,6 +316,8 @@ private:
                 preparedSeen = false;
                 firstDataSeen = false;
                 bufferedPoints = 0;
+                activePointRate = 0;
+                playing = false;
                 sendAck(client, 'a', 's', libera::etherdream::PlaybackState::Idle, 0, 0);
                 continue;
             }
@@ -343,11 +347,14 @@ private:
                 firstDataSeen = false;
                 clearRequiredAfterDataNak = false;
                 bufferedPoints = 0;
+                activePointRate = 0;
+                playing = false;
                 continue;
             }
 
             if (command == 'p') {
                 preparedSeen = true;
+                playing = false;
                 bufferedPoints = preparedBufferAfterPrepare;
                 sendAck(client, 'a', 'p', libera::etherdream::PlaybackState::Prepared, bufferedPoints, 0);
                 continue;
@@ -375,6 +382,7 @@ private:
                     preparedSeen = false;
                     firstDataSeen = false;
                     bufferedPoints = 0;
+                    playing = false;
                     sendAck(client,
                             'a',
                             'd',
@@ -392,6 +400,7 @@ private:
                     firstDataSeen = false;
                     clearRequiredAfterDataNak = true;
                     bufferedPoints = 0;
+                    playing = false;
                     sendAck(client,
                             'I',
                             'd',
@@ -408,6 +417,7 @@ private:
                     firstDataSeen = true;
                     clearRequiredAfterDataNak = true;
                     bufferedPoints = 4096;
+                    playing = false;
                     sendAck(client,
                             'I',
                             'd',
@@ -416,11 +426,7 @@ private:
                             0);
                     continue;
                 }
-                if (firstDataSeen) {
-                    fail("second data command arrived before begin");
-                    return;
-                }
-                if (pointCount > libera::etherdream::config::ETHERDREAM_MAX_PACKET_POINTS) {
+                if (pointCount > libera::etherdream::config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS) {
                     fail("data command exceeded Ether Dream packet limit");
                     return;
                 }
@@ -431,7 +437,14 @@ private:
 
                 firstDataSeen = true;
                 bufferedPoints = static_cast<std::uint16_t>(bufferedPoints + pointCount);
-                sendAck(client, 'a', 'd', libera::etherdream::PlaybackState::Prepared, bufferedPoints, 0);
+                sendAck(client,
+                        'a',
+                        'd',
+                        playing
+                            ? libera::etherdream::PlaybackState::Playing
+                            : libera::etherdream::PlaybackState::Prepared,
+                        bufferedPoints,
+                        activePointRate);
                 continue;
             }
 
@@ -451,6 +464,8 @@ private:
                     beginCount = localBeginCount;
                     beginRateLog.push_back(beginRate);
                 }
+                activePointRate = beginRate;
+                playing = true;
                 sendAck(client,
                         'a',
                         'b',

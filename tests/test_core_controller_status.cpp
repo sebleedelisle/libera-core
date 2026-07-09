@@ -123,6 +123,12 @@ void testEtherDreamStopConditionHasDisplayLabel() {
                 "Ether Dream stop condition label");
 }
 
+void testEtherDreamRebootRequiredHasDisplayLabel() {
+    const auto label = error_types::labelFor(error_types::etherdream::rebootRequired);
+    ASSERT_TRUE(label == std::string_view("Ether Dream playback stuck - reboot DAC"),
+                "Ether Dream reboot-required label");
+}
+
 void testClearErrorsResetsCounts() {
     ControllerStatusHarness controller;
     controller.setConnected(true);
@@ -284,6 +290,7 @@ int main() {
     testEtherDreamPlaybackIdleHasDisplayLabel();
     testEtherDreamStreamStarvationHasDisplayLabel();
     testEtherDreamStopConditionHasDisplayLabel();
+    testEtherDreamRebootRequiredHasDisplayLabel();
     testClearErrorsResetsCounts();
     testIntermittentStatusExpiresWithoutClearingCounts();
     testRecoveredConnectionErrorExpiresWithoutClearingCounts();

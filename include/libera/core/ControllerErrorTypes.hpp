@@ -20,6 +20,7 @@ namespace etherdream {
 inline constexpr std::string_view playbackIdle = "etherdream.playback_idle";
 inline constexpr std::string_view streamStarvation = "etherdream.stream_starvation";
 inline constexpr std::string_view stopCondition = "etherdream.stop_condition";
+inline constexpr std::string_view rebootRequired = "etherdream.reboot_required";
 } // namespace etherdream
 
 namespace usb {
@@ -55,6 +56,7 @@ inline constexpr std::string_view labelFor(std::string_view code) {
     if (code == etherdream::playbackIdle) return "Ether Dream underrun / playback idle";
     if (code == etherdream::streamStarvation) return "Computer performance underrun";
     if (code == etherdream::stopCondition) return "Ether Dream stop condition";
+    if (code == etherdream::rebootRequired) return "Ether Dream playback stuck - reboot DAC";
 
     if (code == usb::connectFailed) return "USB connect failed";
     if (code == usb::connectionLost) return "USB connection lost";

@@ -211,26 +211,29 @@ static void testMultiplePoints() {
     ASSERT_EQ(cmd.size(), static_cast<std::size_t>(57), "header + 3 points");
 }
 
-static void testMaxPacketPointConstantFitsProtocol() {
+static void testSingleSegmentPacketPointConstantFitsProtocol() {
     EtherDreamCommand cmd;
-    cmd.setDataCommand(static_cast<std::uint16_t>(config::ETHERDREAM_MAX_PACKET_POINTS));
+    cmd.setDataCommand(static_cast<std::uint16_t>(
+        config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS));
 
     core::LaserPoint point{};
-    for (std::size_t i = 0; i < config::ETHERDREAM_MAX_PACKET_POINTS; ++i) {
+    for (std::size_t i = 0; i < config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS; ++i) {
         cmd.addPoint(point, false);
     }
 
-    constexpr std::size_t headerBytes = 3;
-    constexpr std::size_t pointBytes = 18;
-    constexpr std::size_t maxTcpPayloadBytes = 65535;
+    constexpr std::size_t headerBytes = config::ETHERDREAM_DATA_COMMAND_HEADER_BYTES;
+    constexpr std::size_t pointBytes = config::ETHERDREAM_DATA_POINT_BYTES;
+    constexpr std::size_t maxTcpPayloadBytes =
+        config::ETHERDREAM_SINGLE_SEGMENT_PAYLOAD_BYTES;
     const std::size_t expectedSize =
-        headerBytes + (config::ETHERDREAM_MAX_PACKET_POINTS * pointBytes);
+        headerBytes + (config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS * pointBytes);
 
     ASSERT_EQ(cmd.size(), expectedSize, "max data command size");
-    ASSERT_TRUE(cmd.size() <= maxTcpPayloadBytes, "max packet fits protocol payload");
-    ASSERT_TRUE(headerBytes + ((config::ETHERDREAM_MAX_PACKET_POINTS + 1) * pointBytes) >
-                    maxTcpPayloadBytes,
-                "one more point would exceed protocol payload");
+    ASSERT_TRUE(cmd.size() <= maxTcpPayloadBytes, "max packet fits one TCP segment payload");
+    ASSERT_TRUE(headerBytes
+                    + ((config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS + 1) * pointBytes)
+                        > maxTcpPayloadBytes,
+                "one more point would exceed the single-segment payload cap");
 }
 
 // ── Reset ────────────────────────────────────────────────────────────
@@ -266,7 +269,7 @@ int main() {
     testPointEncodingNonFiniteValues();
     testRateChangeFlag();
     testMultiplePoints();
-    testMaxPacketPointConstantFitsProtocol();
+    testSingleSegmentPacketPointConstantFitsProtocol();
     testReset();
     testResetBetweenCommands();
 

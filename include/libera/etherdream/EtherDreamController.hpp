@@ -117,6 +117,8 @@ private:
 
     int estimateBufferFullness() const;
     int targetBufferPoints() const;
+    int beginBufferThresholdPoints() const;
+    std::size_t maxDataCommandPoints() const;
     int usableBufferFreeSpace(int bufferFullness) const;
     bool dataPacketWouldOverflowBuffer(const EtherDreamStatus& status,
                                        std::uint64_t sequence) const;
@@ -130,7 +132,8 @@ private:
     void scheduleClearRecovery(const char* recoveryReason,
                                const EtherDreamStatus& status,
                                std::uint64_t sequence = 0);
-    void updatePlaybackRequirements(const EtherDreamStatus& status);
+    void updatePlaybackRequirements(const EtherDreamStatus& status,
+                                    std::uint64_t sequence = 0);
     void applyFreshConnectionStatus(const EtherDreamStatus& status);
     core::PointFillRequest getFillRequest();
     bool shouldRequestPoints(const core::PointFillRequest& request) const;
@@ -244,6 +247,8 @@ private:
     bool beginRequired = false;
     bool connectionActive = false;
     bool clearOnFreshConnection = false;
+    bool implausiblePointRateRecoveryPending = false;
+    bool rebootRequiredLatched = false;
 
     std::optional<std::error_code> lastError;
 

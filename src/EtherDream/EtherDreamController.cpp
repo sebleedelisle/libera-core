@@ -368,7 +368,7 @@ EtherDreamController::waitForResponse(char command,
         logProtocolRx(sequence, command, response, raw.data(), raw.size());
 
         if (response.response == '!' && static_cast<char>(response.command) == command) {
-            updatePlaybackRequirements(response.status);
+            updatePlaybackRequirements(response.status, sequence);
             logError("[EtherDream] stop condition active for command", command,
                      "conn", connectionGeneration,
                      "seq", sequence,
@@ -382,7 +382,7 @@ EtherDreamController::waitForResponse(char command,
         // 'I' is a NAK for an invalid command. The accompanying status tells us
         // which recovery command should come next.
         if (response.response == 'I' && static_cast<char>(response.command) == command) {
-            updatePlaybackRequirements(response.status);
+            updatePlaybackRequirements(response.status, sequence);
             const bool dataRejectedBecausePlaybackIdle =
                 command == 'd'
                 && response.status.lightEngineState == LightEngineState::Ready
@@ -440,7 +440,7 @@ EtherDreamController::waitForResponse(char command,
         }
 
         if (response.response == 'F' && static_cast<char>(response.command) == command) {
-            updatePlaybackRequirements(response.status);
+            updatePlaybackRequirements(response.status, sequence);
             logError("[EtherDream] NAK buffer full for command", command,
                      "conn", connectionGeneration,
                      "seq", sequence,
@@ -457,7 +457,7 @@ EtherDreamController::waitForResponse(char command,
         const bool ackMatched = (response.response == 'a') &&
                                 (static_cast<char>(response.command) == command);
 
-        updatePlaybackRequirements(response.status);
+        updatePlaybackRequirements(response.status, sequence);
 
         if (!ackMatched) {
             logError("[EtherDream] unexpected ACK expected", command,
@@ -822,7 +822,8 @@ void EtherDreamController::scheduleClearRecovery(const char* recoveryReason,
 }
 
 
-void EtherDreamController::updatePlaybackRequirements(const EtherDreamStatus& status) {
+void EtherDreamController::updatePlaybackRequirements(const EtherDreamStatus& status,
+                                                      std::uint64_t sequence) {
     const bool wasUnderflow = lastKnownStatus.hasPlaybackUnderflow();
     lastKnownStatus = status;
     lastReceiveTime = std::chrono::steady_clock::now();
@@ -864,24 +865,44 @@ void EtherDreamController::updatePlaybackRequirements(const EtherDreamStatus& st
     }
 
     if (statusPointRateIsImplausible(status)) {
-        logError("[EtherDream] reported implausible active point rate; resetting playback",
-                 "reported", status.pointRate,
-                 "max", maxSafePointRate(),
-                 "sts", status.describe());
-        recordIntermittentError(error_types::network::protocolError);
+        if (!implausiblePointRateRecoveryPending && !rebootRequiredLatched) {
+            implausiblePointRateRecoveryPending = true;
+            logError("[EtherDream] implausible active point rate; attempting clear recovery",
+                     "reported", status.pointRate,
+                     "max", maxSafePointRate(),
+                     "sts", status.describe(),
+                     "tx", describeProtocolTx(sequence));
+            scheduleClearRecovery("implausible_point_rate", status, sequence);
+            return;
+        }
+
+        if (!rebootRequiredLatched) {
+            rebootRequiredLatched = true;
+            logError("[EtherDream] playback engine appears stuck after recovery; DAC reboot required",
+                     "reported", status.pointRate,
+                     "max", maxSafePointRate(),
+                     "sts", status.describe(),
+                     "tx", describeProtocolTx(sequence));
+            recordIntermittentError(error_types::etherdream::rebootRequired);
+        }
         stopRequired = true;
         resetPoints();
         return;
     }
+
+    implausiblePointRateRecoveryPending = false;
+    rebootRequiredLatched = false;
 
     // Command validity is governed by the reported playback state. Flags such
     // as underflow are useful diagnostics, but may be sticky; do not send
     // prepare while the DAC still says it is prepared/playing.
     prepareRequired = status.playbackState == PlaybackState::Idle;
 
-    const std::size_t bufferFullness = static_cast<std::size_t>(status.bufferFullness);
+    const int beginThreshold = beginBufferThresholdPoints();
+    const int bufferFullness = static_cast<int>(status.bufferFullness);
     beginRequired = status.playbackState == PlaybackState::Prepared
-        && bufferFullness >= config::ETHERDREAM_MIN_PACKET_POINTS;
+        && beginThreshold > 0
+        && bufferFullness >= beginThreshold;
 }
 
 void EtherDreamController::applyFreshConnectionStatus(const EtherDreamStatus& status) {
@@ -936,7 +957,7 @@ core::PointFillRequest EtherDreamController::getFillRequest() {
     const int targetPoints = targetBufferPoints();
 
     const auto freeSpace = usableBufferFreeSpace(bufferFullness);
-    const auto packetSpace = std::min<std::size_t>(freeSpace, config::ETHERDREAM_MAX_PACKET_POINTS);
+    const auto packetSpace = std::min<std::size_t>(freeSpace, maxDataCommandPoints());
     const auto targetDeficit =
         std::min<std::size_t>(calculateMinimumPoints(), packetSpace);
     
@@ -970,7 +991,7 @@ core::PointFillRequest EtherDreamController::getFillRequest() {
 bool EtherDreamController::shouldRequestPoints(const core::PointFillRequest& request) const {
     if (lastKnownStatus.lightEngineState == LightEngineState::Ready
         && lastKnownStatus.playbackState == PlaybackState::Prepared
-        && lastKnownStatus.bufferFullness < config::ETHERDREAM_MIN_PACKET_POINTS) {
+        && static_cast<int>(lastKnownStatus.bufferFullness) < beginBufferThresholdPoints()) {
         return request.minimumPointsRequired > 0;
     }
 
@@ -1525,6 +1546,25 @@ int EtherDreamController::targetBufferPoints() const {
         static_cast<int>(config::ETHERDREAM_SAFETY_HEADROOM_POINTS));
 }
 
+int EtherDreamController::beginBufferThresholdPoints() const {
+    return targetBufferPoints();
+}
+
+std::size_t EtherDreamController::maxDataCommandPoints() const {
+    const std::uint32_t pointRate = getPointRate();
+    if (pointRate <= config::ETHERDREAM_SINGLE_SEGMENT_MAX_POINT_RATE) {
+        return config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS;
+    }
+
+    const auto targetDurationMs = static_cast<std::size_t>(
+        config::ETHERDREAM_HIGH_RATE_PACKET_TARGET_DURATION.count());
+    const auto pointsForTargetDuration = static_cast<std::size_t>(
+        (static_cast<std::uint64_t>(pointRate) * targetDurationMs + 999u) / 1000u);
+    return std::clamp(pointsForTargetDuration,
+                      config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS,
+                      config::ETHERDREAM_HIGH_RATE_MAX_PACKET_POINTS);
+}
+
 int EtherDreamController::usableBufferFreeSpace(int bufferFullness) const {
     const int bufferSize = getBufferSize();
     if (bufferSize <= 0) {
@@ -1641,6 +1681,8 @@ void EtherDreamController::resetProtocolStateForConnection() {
     lastReceiveTime = {};
     pendingRateChangeCount = 0;
     lastSentPointRate = 0;
+    implausiblePointRateRecoveryPending = false;
+    rebootRequiredLatched = false;
     nextCommandSequence = 0;
     protocolTxHistory = {};
     nextProtocolTxHistoryIndex = 0;

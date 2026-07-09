@@ -81,12 +81,24 @@ public:
         return controller.stopRequired;
     }
 
+    static bool clearRequired(const EtherDreamController& controller) {
+        return controller.clearRequired;
+    }
+
     static bool prepareRequired(const EtherDreamController& controller) {
         return controller.prepareRequired;
     }
 
     static bool beginRequired(const EtherDreamController& controller) {
         return controller.beginRequired;
+    }
+
+    static int beginBufferThresholdPoints(const EtherDreamController& controller) {
+        return controller.beginBufferThresholdPoints();
+    }
+
+    static std::size_t maxDataCommandPoints(const EtherDreamController& controller) {
+        return controller.maxDataCommandPoints();
     }
 
     static core::PointFillRequest getFillRequest(EtherDreamController& controller) {
@@ -253,6 +265,7 @@ void testRequestedPointRateClampsToControllerMaximum() {
 
 void testImplausibleReportedPointRateForcesReset() {
     auto controller = makeController();
+    controller->clearErrors();
     EtherDreamStatus status{};
     status.lightEngineState = LightEngineState::Ready;
     status.playbackState = PlaybackState::Playing;
@@ -261,12 +274,41 @@ void testImplausibleReportedPointRateForcesReset() {
 
     EtherDreamControllerTestAccess::updatePlaybackRequirements(*controller, status);
 
-    ASSERT_TRUE(EtherDreamControllerTestAccess::stopRequired(*controller),
-                "implausible active point rate should force stop/re-prepare instead of more data");
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::stopRequired(*controller),
+                "first implausible active point rate should not immediately force reboot stop");
+    ASSERT_TRUE(EtherDreamControllerTestAccess::clearRequired(*controller),
+                "first implausible active point rate should attempt clear recovery");
     ASSERT_TRUE(!EtherDreamControllerTestAccess::prepareRequired(*controller),
-                "implausible active point rate reset should not prepare until stop completes");
+                "implausible active point rate reset should not prepare until clear completes");
     ASSERT_TRUE(!EtherDreamControllerTestAccess::beginRequired(*controller),
                 "implausible active point rate reset should not begin until stream is rebuilt");
+
+    const std::string rebootRequiredCode(core::error_types::etherdream::rebootRequired);
+    for (const auto& error : controller->getErrors()) {
+        ASSERT_TRUE(error.code != rebootRequiredCode,
+                    "first implausible active point rate should not yet be reported as reboot required");
+    }
+
+    EtherDreamControllerTestAccess::updatePlaybackRequirements(*controller, status);
+
+    ASSERT_TRUE(EtherDreamControllerTestAccess::stopRequired(*controller),
+                "repeated implausible active point rate after recovery should force stop");
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::clearRequired(*controller),
+                "repeated implausible active point rate should not keep scheduling clear recovery");
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::prepareRequired(*controller),
+                "repeated implausible active point rate should not prepare until stop/reconnect");
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::beginRequired(*controller),
+                "repeated implausible active point rate should not begin until stream is rebuilt");
+
+    bool foundRebootRequired = false;
+    for (const auto& error : controller->getErrors()) {
+        if (error.code == rebootRequiredCode && error.count == 1) {
+            foundRebootRequired = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(foundRebootRequired,
+                "implausible active point rate should be reported as Ether Dream reboot required");
 }
 
 void testPointRateChangeWhilePlayingSchedulesRestart() {
@@ -307,8 +349,8 @@ void testFillRequestLeavesOnePointWriteHeadroom() {
 
     const auto request = EtherDreamControllerTestAccess::getFillRequest(*controller);
 
-    ASSERT_EQ(request.maximumPointsRequired, static_cast<std::size_t>(149),
-              "Ether Dream writes should leave one point free instead of exactly filling the FIFO");
+    ASSERT_EQ(request.maximumPointsRequired, config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS,
+              "Ether Dream writes should still obey the packet cap when FIFO space is larger");
     ASSERT_TRUE(request.minimumPointsRequired <= request.maximumPointsRequired,
                 "minimum request must stay within capped packet space");
 
@@ -316,6 +358,49 @@ void testFillRequestLeavesOnePointWriteHeadroom() {
     const auto nearlyFullRequest = EtherDreamControllerTestAccess::getFillRequest(*controller);
     ASSERT_EQ(nearlyFullRequest.maximumPointsRequired, static_cast<std::size_t>(0),
               "one advertised free point is reserved as write headroom");
+}
+
+void testHighPointRateUsesTimeBasedPacketCap() {
+    auto controller = makeController(30);
+    controller->setPointRate(80000);
+
+    const auto maxPoints = EtherDreamControllerTestAccess::maxDataCommandPoints(*controller);
+
+    ASSERT_EQ(maxPoints, static_cast<std::size_t>(400),
+              "80k Ether Dream output should use about a 5ms packet, not a sub-1ms single-MTU packet");
+
+    setStatus(*controller, PlaybackState::Prepared, 3000, 0, 0ms);
+    const auto request = EtherDreamControllerTestAccess::getFillRequest(*controller);
+    ASSERT_EQ(request.maximumPointsRequired, maxPoints,
+              "fill requests should use the rate-aware data command cap");
+}
+
+void testPreparedStartupRequestsUntilBeginThreshold() {
+    core::LaserController::setTargetLatency(0ms);
+    auto controller = makeController(30);
+
+    EtherDreamStatus status{};
+    status.lightEngineState = LightEngineState::Ready;
+    status.playbackState = PlaybackState::Prepared;
+    status.bufferFullness = static_cast<std::uint16_t>(
+        config::ETHERDREAM_MIN_BUFFER_POINTS - 1);
+    status.pointRate = 0;
+
+    EtherDreamControllerTestAccess::updatePlaybackRequirements(*controller, status);
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::beginRequired(*controller),
+                "prepared Ether Dream should wait for the latency-derived begin threshold");
+
+    const auto request = EtherDreamControllerTestAccess::getFillRequest(*controller);
+    ASSERT_EQ(request.minimumPointsRequired, static_cast<std::size_t>(1),
+              "prepared startup should request the final point needed for the begin threshold");
+    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "prepared startup should keep requesting below the begin threshold even below the normal packet gate");
+
+    status.bufferFullness = static_cast<std::uint16_t>(
+        EtherDreamControllerTestAccess::beginBufferThresholdPoints(*controller));
+    EtherDreamControllerTestAccess::updatePlaybackRequirements(*controller, status);
+    ASSERT_TRUE(EtherDreamControllerTestAccess::beginRequired(*controller),
+                "prepared Ether Dream should begin once the latency-derived threshold is buffered");
 }
 
 void testDataNakWithPartialFullStatusCanBeBufferOverrun() {
@@ -578,6 +663,8 @@ int main() {
     testPointRateChangeWhilePlayingSchedulesRestart();
     testPointRateChangeBeforeBeginWaitsForBeginRate();
     testFillRequestLeavesOnePointWriteHeadroom();
+    testHighPointRateUsesTimeBasedPacketCap();
+    testPreparedStartupRequestsUntilBeginThreshold();
     testDataNakWithPartialFullStatusCanBeBufferOverrun();
     testOlderEtherDreamOnlyTreatsZeroPlayingBufferAsUnderrun();
     testNewerEtherDreamTreatsSub256PlayingBufferAsUnderrun();
