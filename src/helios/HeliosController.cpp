@@ -153,15 +153,16 @@ struct HeliosUsbOpenResult {
     int firmwareVersion = 0;
 };
 
-HeliosUsbOpenResult openHeliosUsbConnection(libusb_context* usbContext,
-                                            const std::string& controllerPortPath) {
+HeliosUsbOpenResult openHeliosUsbConnectionLocked(libusb_context* usbContext,
+                                                  const std::string& controllerPortPath) {
     HeliosUsbOpenResult result;
     if (usbContext == nullptr || controllerPortPath.empty()) {
         return result;
     }
 
     // Direct USB connect intentionally enumerates raw libusb devices and claims
-    // only the one matching the persisted port path.
+    // only the one matching the persisted port path. Caller must hold the shared
+    // Helios USB lifecycle lock for this whole list/open/startup/free sequence.
     libusb_device** deviceList = nullptr;
     const ssize_t count = libusb_get_device_list(usbContext, &deviceList);
     if (count < 0 || !deviceList) {
@@ -231,8 +232,12 @@ HeliosUsbOpenResult openHeliosUsbConnection(libusb_context* usbContext,
 namespace error_types = libera::core::error_types;
 
 struct HeliosController::DirectUsbConnection {
-    DirectUsbConnection(libusb_device_handle* deviceHandle, int fw)
-        : handle(deviceHandle), firmwareVersion(fw) {
+    DirectUsbConnection(libusb_device_handle* deviceHandle,
+                        int fw,
+                        std::shared_ptr<std::mutex> lifecycleMutex)
+        : handle(deviceHandle)
+        , usbLifecycleMutex(std::move(lifecycleMutex))
+        , firmwareVersion(fw) {
         // Keep one reusable transfer buffer per DAC instance. The Helios USB
         // path is hot and allocation churn here is unnecessary.
         bulkTransferBuffer.reserve((HELIOS_MAX_POINTS * 7) + 5);
@@ -255,11 +260,16 @@ struct HeliosController::DirectUsbConnection {
         // against releasing the USB interface underneath it.
         const bool wasClosed = closed.exchange(true, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(ioMutex);
-        closeHandleLocked(!wasClosed);
+        if (usbLifecycleMutex) {
+            std::lock_guard<std::mutex> lifecycleLock(*usbLifecycleMutex);
+            closeHandleLocked(!wasClosed);
+        } else {
+            closeHandleLocked(!wasClosed);
+        }
     }
 
     bool tryReconnect(libusb_context* context, const std::string& controllerPortPath) {
-        if (context == nullptr || controllerPortPath.empty()) {
+        if (context == nullptr || !usbLifecycleMutex || controllerPortPath.empty()) {
             return false;
         }
 
@@ -271,8 +281,10 @@ struct HeliosController::DirectUsbConnection {
         // A fatal libusb error leaves the old handle unusable. Close that
         // handle first, then run the exact same open/claim/startup sequence as
         // the initial connection path.
+        std::lock_guard<std::mutex> lifecycleLock(*usbLifecycleMutex);
         closeHandleLocked(false);
-        const HeliosUsbOpenResult reopened = openHeliosUsbConnection(context, controllerPortPath);
+        const HeliosUsbOpenResult reopened =
+            openHeliosUsbConnectionLocked(context, controllerPortPath);
         if (reopened.handle == nullptr) {
             return false;
         }
@@ -575,6 +587,7 @@ private:
     }
 
     libusb_device_handle* handle = nullptr;
+    std::shared_ptr<std::mutex> usbLifecycleMutex;
     std::atomic<bool> closed{false};
     std::atomic<bool> abandonHandleOnClose{false};
     bool shutterOpen = false;
@@ -585,19 +598,23 @@ private:
 
 std::shared_ptr<HeliosController> HeliosController::connectUsb(
     std::shared_ptr<libusb_context> usbContext,
+    std::shared_ptr<std::mutex> usbLifecycleMutex,
     std::string controllerPortPath) {
-    if (!usbContext || controllerPortPath.empty()) {
+    if (!usbContext || !usbLifecycleMutex || controllerPortPath.empty()) {
         return {};
     }
 
+    std::lock_guard<std::mutex> lifecycleLock(*usbLifecycleMutex);
     const HeliosUsbOpenResult opened =
-        openHeliosUsbConnection(usbContext.get(), controllerPortPath);
+        openHeliosUsbConnectionLocked(usbContext.get(), controllerPortPath);
     if (opened.handle == nullptr) {
         return {};
     }
 
     auto directConnection =
-        std::make_unique<DirectUsbConnection>(opened.handle, opened.firmwareVersion);
+        std::make_unique<DirectUsbConnection>(opened.handle,
+                                              opened.firmwareVersion,
+                                              usbLifecycleMutex);
 
     return std::shared_ptr<HeliosController>(
         new HeliosController(std::move(usbContext),

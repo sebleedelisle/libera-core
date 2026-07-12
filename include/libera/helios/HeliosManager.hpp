@@ -5,6 +5,7 @@
 #include "libera/helios/HeliosController.hpp"
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,6 +48,9 @@ private:
     // existing LaserCube USB strategy, we keep the context alive for the life of
     // the process and let the OS reclaim it on exit.
     std::shared_ptr<libusb_context> usbContext;
+    // Serialize direct Helios USB discovery/connect/reconnect operations that
+    // enumerate, open, claim, or free libusb device-list state on this context.
+    std::shared_ptr<std::mutex> usbLifecycleMutex{std::make_shared<std::mutex>()};
 
     // Keep labels stable across transient direct USB name-read failures so a
     // briefly unhealthy control channel doesn't churn device identity.

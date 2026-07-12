@@ -559,7 +559,7 @@ std::vector<HeliosControllerInfo> HeliosManager::collectDiscoveredControllers(
     const ActiveControllerSnapshot& activeSnapshot) {
     std::vector<HeliosControllerInfo> results;
 
-    if (!usbContext) {
+    if (!usbContext || !usbLifecycleMutex) {
         return results;
     }
 
@@ -575,6 +575,12 @@ std::vector<HeliosControllerInfo> HeliosManager::collectDiscoveredControllers(
     //
     // So discovery is now a lightweight direct probe, and only connect() takes
     // exclusive ownership of a single chosen DAC.
+    //
+    // Keep this whole probe pass serialized with controller reconnect. The
+    // probes keep libusb_device* pointers alive until the final free below, and
+    // optional auto-rename may reopen a probe late in this function.
+    std::lock_guard<std::mutex> lifecycleLock(*usbLifecycleMutex);
+
     libusb_device** deviceList = nullptr;
     const ssize_t deviceCount = libusb_get_device_list(usbContext.get(), &deviceList);
     if (deviceCount < 0 || deviceList == nullptr) {
@@ -775,13 +781,13 @@ HeliosManager::controllerKey(const HeliosControllerInfo& info) const {
 
 std::shared_ptr<HeliosController>
 HeliosManager::createController(const HeliosControllerInfo& info) {
-    if (!info.isUsbController() || info.portPath().empty() || !usbContext) {
+    if (!info.isUsbController() || info.portPath().empty() || !usbContext || !usbLifecycleMutex) {
         return nullptr;
     }
 
     // Direct USB connect claims only the selected DAC, leaving other
     // Helios DACs visible and connectable from other processes.
-    return HeliosController::connectUsb(usbContext, info.portPath());
+    return HeliosController::connectUsb(usbContext, usbLifecycleMutex, info.portPath());
 }
 
 bool HeliosManager::shouldReuseController(const HeliosController& controller,
