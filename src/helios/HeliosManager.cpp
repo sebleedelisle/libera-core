@@ -1,6 +1,7 @@
 #include "libera/helios/HeliosManager.hpp"
 
 #include "libera/log/Log.hpp"
+#include "libera/usb/LibusbSafe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -576,7 +577,8 @@ std::vector<HeliosControllerInfo> HeliosManager::collectDiscoveredControllers(
     // So discovery is now a lightweight direct probe, and only connect() takes
     // exclusive ownership of a single chosen DAC.
     libusb_device** deviceList = nullptr;
-    const ssize_t deviceCount = libusb_get_device_list(usbContext.get(), &deviceList);
+    const ssize_t deviceCount =
+        libera::usb::getDeviceList(usbContext.get(), &deviceList, "HeliosManager::collectDiscoveredControllers");
     if (deviceCount < 0 || deviceList == nullptr) {
         return results;
     }

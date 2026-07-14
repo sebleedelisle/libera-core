@@ -3,6 +3,7 @@
 #include "libera/core/ControllerErrorTypes.hpp"
 #include "libera/helios/HeliosTransportSupport.hpp"
 #include "libera/log/Log.hpp"
+#include "libera/usb/LibusbSafe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -478,7 +479,8 @@ std::shared_ptr<HeliosController> HeliosController::connectUsb(
     // This is the key fix for multi-Helios setups: connecting one DAC must not
     // implicitly claim every Helios USB DAC visible to the process.
     libusb_device** deviceList = nullptr;
-    const ssize_t count = libusb_get_device_list(usbContext.get(), &deviceList);
+    const ssize_t count =
+        libera::usb::getDeviceList(usbContext.get(), &deviceList, "HeliosController::connectUsb");
     if (count < 0 || !deviceList) {
         return {};
     }

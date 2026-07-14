@@ -5,6 +5,7 @@
 #include "libera/core/ControllerErrorTypes.hpp"
 #include "libera/lasercubeusb/LaserCubeUsbConfig.hpp"
 #include "libera/log/Log.hpp"
+#include "libera/usb/LibusbSafe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -183,7 +184,8 @@ libera::expected<void> LaserCubeUsbController::connect(const LaserCubeUsbControl
     }
 
     libusb_device** deviceList = nullptr;
-    const ssize_t count = libusb_get_device_list(usbContext.get(), &deviceList);
+    const ssize_t count =
+        libera::usb::getDeviceList(usbContext.get(), &deviceList, "LaserCubeUsbController::connect");
     if (count < 0 || !deviceList) {
         recordConnectionError(error_types::usb::connectFailed);
         return libera::unexpected(std::make_error_code(std::errc::io_error));
