@@ -26,6 +26,79 @@
 
 namespace libera::core {
 namespace {
+
+#if defined(_WIN32)
+class WindowsMmcssThreadRegistration {
+public:
+    WindowsMmcssThreadRegistration() {
+        if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST)) {
+            logInfo("[LaserControllerStreaming] SetThreadPriority failed", static_cast<int>(GetLastError()));
+        }
+
+        avrtModule = LoadLibraryW(L"avrt.dll");
+        if (!avrtModule) {
+            logInfo("[LaserControllerStreaming] LoadLibraryW(avrt.dll) failed",
+                    static_cast<int>(GetLastError()));
+            return;
+        }
+
+        setCharacteristics = reinterpret_cast<AvSetMmThreadCharacteristicsWFn>(
+            GetProcAddress(avrtModule, "AvSetMmThreadCharacteristicsW"));
+        setPriority = reinterpret_cast<AvSetMmThreadPriorityFn>(
+            GetProcAddress(avrtModule, "AvSetMmThreadPriority"));
+        revertCharacteristics = reinterpret_cast<AvRevertMmThreadCharacteristicsFn>(
+            GetProcAddress(avrtModule, "AvRevertMmThreadCharacteristics"));
+
+        if (!setCharacteristics || !setPriority || !revertCharacteristics) {
+            logInfo("[LaserControllerStreaming] avrt.dll MMCSS entry point lookup failed");
+            FreeLibrary(avrtModule);
+            avrtModule = nullptr;
+            return;
+        }
+
+        DWORD taskIndex = 0;
+        mmcssHandle = setCharacteristics(L"Pro Audio", &taskIndex);
+        if (!mmcssHandle) {
+            logInfo("[LaserControllerStreaming] AvSetMmThreadCharacteristicsW failed",
+                    static_cast<int>(GetLastError()));
+            return;
+        }
+
+        constexpr int avrtPriorityCritical = 2;
+        if (!setPriority(mmcssHandle, avrtPriorityCritical)) {
+            logInfo("[LaserControllerStreaming] AvSetMmThreadPriority failed",
+                    static_cast<int>(GetLastError()));
+        }
+    }
+
+    ~WindowsMmcssThreadRegistration() {
+        if (mmcssHandle && revertCharacteristics) {
+            if (!revertCharacteristics(mmcssHandle)) {
+                logInfo("[LaserControllerStreaming] AvRevertMmThreadCharacteristics failed",
+                        static_cast<int>(GetLastError()));
+            }
+        }
+        if (avrtModule) {
+            FreeLibrary(avrtModule);
+        }
+    }
+
+    WindowsMmcssThreadRegistration(const WindowsMmcssThreadRegistration&) = delete;
+    WindowsMmcssThreadRegistration& operator=(const WindowsMmcssThreadRegistration&) = delete;
+
+private:
+    using AvSetMmThreadCharacteristicsWFn = HANDLE (WINAPI *)(LPCWSTR, LPDWORD);
+    using AvSetMmThreadPriorityFn = BOOL (WINAPI *)(HANDLE, int);
+    using AvRevertMmThreadCharacteristicsFn = BOOL (WINAPI *)(HANDLE);
+
+    HMODULE avrtModule = nullptr;
+    HANDLE mmcssHandle = nullptr;
+    AvSetMmThreadPriorityFn setPriority = nullptr;
+    AvRevertMmThreadCharacteristicsFn revertCharacteristics = nullptr;
+    AvSetMmThreadCharacteristicsWFn setCharacteristics = nullptr;
+};
+#endif
+
 void elevateWorkerThreadPriority() {
 #if defined(__APPLE__)
     // macOS: keep streaming responsive without competing with UI/input/render
@@ -49,6 +122,20 @@ void elevateWorkerThreadPriority() {
     }
 #endif
 }
+
+class WorkerThreadPriorityScope {
+public:
+    WorkerThreadPriorityScope() {
+#if !defined(_WIN32)
+        elevateWorkerThreadPriority();
+#endif
+    }
+
+private:
+#if defined(_WIN32)
+    WindowsMmcssThreadRegistration mmcssRegistration;
+#endif
+};
 
 double percentileFromSortedSamples(const std::vector<double>& sorted, double percentile) {
     if (sorted.empty()) {
@@ -253,7 +340,7 @@ void LaserControllerStreaming::startThread() {
     running = true;
     worker = std::thread([this] {
         try {
-            elevateWorkerThreadPriority();
+            WorkerThreadPriorityScope workerThreadPriorityScope;
             this->run();
         } catch (const std::exception& e) {
             logError("[LaserControllerStreaming] uncaught exception in worker thread", e.what());
