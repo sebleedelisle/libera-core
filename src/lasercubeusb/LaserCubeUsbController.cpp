@@ -1,3 +1,10 @@
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define _WINSOCKAPI_
+#endif
+
 #include "libera/lasercubeusb/LaserCubeUsbController.hpp"
 
 #include "libera/core/BufferEstimator.hpp"
@@ -14,12 +21,6 @@
 #include <stdexcept>
 #include <thread>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX // Keep Windows headers from defining min/max macros that break std::min/std::max.
-#endif
-#define _WINSOCKAPI_
-#endif
 #include "libusb.h"
 
 namespace libera::lasercubeusb {
