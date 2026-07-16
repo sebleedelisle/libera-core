@@ -426,7 +426,7 @@ private:
                             0);
                     continue;
                 }
-                if (pointCount > libera::etherdream::config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS) {
+                if (pointCount > libera::etherdream::config::ETHERDREAM_MAX_PACKET_POINTS) {
                     fail("data command exceeded Ether Dream packet limit");
                     return;
                 }

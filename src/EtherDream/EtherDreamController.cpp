@@ -1002,7 +1002,8 @@ bool EtherDreamController::shouldRequestPoints(const core::PointFillRequest& req
         return request.maximumPointsRequired > 0;
     }
 
-    return request.minimumPointsRequired >= config::ETHERDREAM_MIN_PACKET_POINTS;
+    return request.minimumPointsRequired > config::ETHERDREAM_MIN_PACKET_POINTS
+        || request.maximumPointsRequired > config::ETHERDREAM_MIN_PACKET_POINTS;
 }
 
 bool EtherDreamController::canSendData() const {
@@ -1551,18 +1552,7 @@ int EtherDreamController::beginBufferThresholdPoints() const {
 }
 
 std::size_t EtherDreamController::maxDataCommandPoints() const {
-    const std::uint32_t pointRate = getPointRate();
-    if (pointRate <= config::ETHERDREAM_SINGLE_SEGMENT_MAX_POINT_RATE) {
-        return config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS;
-    }
-
-    const auto targetDurationMs = static_cast<std::size_t>(
-        config::ETHERDREAM_HIGH_RATE_PACKET_TARGET_DURATION.count());
-    const auto pointsForTargetDuration = static_cast<std::size_t>(
-        (static_cast<std::uint64_t>(pointRate) * targetDurationMs + 999u) / 1000u);
-    return std::clamp(pointsForTargetDuration,
-                      config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS,
-                      config::ETHERDREAM_HIGH_RATE_MAX_PACKET_POINTS);
+    return config::ETHERDREAM_MAX_PACKET_POINTS;
 }
 
 int EtherDreamController::usableBufferFreeSpace(int bufferFullness) const {

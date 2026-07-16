@@ -23,24 +23,15 @@ constexpr std::chrono::seconds ETHERDREAM_DISCOVERY_TIMEOUT{3};
 
 constexpr std::size_t ETHERDREAM_DATA_COMMAND_HEADER_BYTES = 3;
 constexpr std::size_t ETHERDREAM_DATA_POINT_BYTES = 18;
-// Keep each data command comfortably inside one standard Ethernet MTU. This
-// avoids relying on Ether Dream firmware/network equipment to reassemble large
-// multi-segment TCP writes under streaming load when the resulting packet
-// cadence is still practical for the host thread.
 constexpr std::size_t ETHERDREAM_SINGLE_SEGMENT_PAYLOAD_BYTES = 1400;
-constexpr std::size_t ETHERDREAM_MIN_PACKET_POINTS = 75;  // preferred playing-mode refill gate
 constexpr std::size_t ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS =
     (ETHERDREAM_SINGLE_SEGMENT_PAYLOAD_BYTES - ETHERDREAM_DATA_COMMAND_HEADER_BYTES) /
     ETHERDREAM_DATA_POINT_BYTES;
-static_assert(ETHERDREAM_MIN_PACKET_POINTS <= ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS,
-              "Ether Dream minimum packet must fit under the maximum packet cap");
-// Above this point rate, a single-MTU data command represents less than about
-// 2ms of playback and can starve the DAC through sheer ACK/callback cadence.
-constexpr std::uint32_t ETHERDREAM_SINGLE_SEGMENT_MAX_POINT_RATE = 40000;
-constexpr std::chrono::milliseconds ETHERDREAM_HIGH_RATE_PACKET_TARGET_DURATION{5};
-constexpr std::size_t ETHERDREAM_HIGH_RATE_MAX_PACKET_POINTS = 512;
-static_assert(ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS <= ETHERDREAM_HIGH_RATE_MAX_PACKET_POINTS,
-              "high-rate packet cap must be at least the single-segment cap");
+// Legacy 1.0.3-style streaming: request when there is a meaningful deficit or
+// meaningful FIFO space, then let the frame scheduler produce a variable-sized
+// chunk up to the available space rather than forcing single-MTU refills.
+constexpr std::size_t ETHERDREAM_MIN_PACKET_POINTS = 150;
+constexpr std::size_t ETHERDREAM_MAX_PACKET_POINTS = 3640;
 
 constexpr std::chrono::milliseconds ETHERDREAM_MIN_SLEEP{1};
 constexpr std::chrono::milliseconds ETHERDREAM_MAX_SLEEP{50};

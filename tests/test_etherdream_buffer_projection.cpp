@@ -345,12 +345,12 @@ void testPointRateChangeBeforeBeginWaitsForBeginRate() {
 
 void testFillRequestLeavesOnePointWriteHeadroom() {
     auto controller = makeController(30);
-    setStatus(*controller, PlaybackState::Prepared, 3946, 0, 0ms);
+    setStatus(*controller, PlaybackState::Prepared, 400, 0, 0ms);
 
     const auto request = EtherDreamControllerTestAccess::getFillRequest(*controller);
 
-    ASSERT_EQ(request.maximumPointsRequired, config::ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS,
-              "Ether Dream writes should still obey the packet cap when FIFO space is larger");
+    ASSERT_EQ(request.maximumPointsRequired, config::ETHERDREAM_MAX_PACKET_POINTS,
+              "Ether Dream writes should use the legacy data command cap when FIFO space is larger");
     ASSERT_TRUE(request.minimumPointsRequired <= request.maximumPointsRequired,
                 "minimum request must stay within capped packet space");
 
@@ -360,19 +360,19 @@ void testFillRequestLeavesOnePointWriteHeadroom() {
               "one advertised free point is reserved as write headroom");
 }
 
-void testHighPointRateUsesTimeBasedPacketCap() {
+void testHighPointRateUsesLegacyPacketCap() {
     auto controller = makeController(30);
     controller->setPointRate(80000);
 
     const auto maxPoints = EtherDreamControllerTestAccess::maxDataCommandPoints(*controller);
 
-    ASSERT_EQ(maxPoints, static_cast<std::size_t>(400),
-              "80k Ether Dream output should use about a 5ms packet, not a sub-1ms single-MTU packet");
+    ASSERT_EQ(maxPoints, config::ETHERDREAM_MAX_PACKET_POINTS,
+              "high point rates should use the same legacy Ether Dream data command cap");
 
-    setStatus(*controller, PlaybackState::Prepared, 3000, 0, 0ms);
+    setStatus(*controller, PlaybackState::Prepared, 0, 0, 0ms);
     const auto request = EtherDreamControllerTestAccess::getFillRequest(*controller);
     ASSERT_EQ(request.maximumPointsRequired, maxPoints,
-              "fill requests should use the rate-aware data command cap");
+              "fill requests should use the legacy data command cap");
 }
 
 void testPreparedStartupRequestsUntilBeginThreshold() {
@@ -649,8 +649,43 @@ void testPlayingBelowUnderrunThresholdRequestsPointsImmediately() {
         static_cast<int>(config::ETHERDREAM_MIN_BUFFER_POINTS),
         static_cast<int>(config::ETHERDREAM_MIN_BUFFER_POINTS),
         0ms);
+    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "playing at threshold should use the normal legacy free-space gate");
+
+    request.maximumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS;
     ASSERT_TRUE(!EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
-                "playing at threshold should keep the normal minimum packet gate");
+                "normal legacy gate should be strict: exactly the threshold is not enough");
+}
+
+void testNormalRequestGateUsesTargetDeficitOrFreeSpace() {
+    auto controller = makeController(30);
+    setStatus(*controller,
+              PlaybackState::Playing,
+              1500,
+              30000,
+              0ms);
+    EtherDreamControllerTestAccess::setPendingStreamHealthRequest(
+        *controller,
+        true,
+        1500,
+        1500,
+        0ms);
+
+    core::PointFillRequest request{};
+    request.minimumPointsRequired = 0;
+    request.maximumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS + 1;
+    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "legacy gate should request points when useful FIFO space is available");
+
+    request.minimumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS + 1;
+    request.maximumPointsRequired = 0;
+    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "legacy gate should request points when the target deficit is large enough");
+
+    request.minimumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS;
+    request.maximumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS;
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "legacy gate should match the old strict greater-than threshold");
 }
 
 } // namespace
@@ -663,7 +698,7 @@ int main() {
     testPointRateChangeWhilePlayingSchedulesRestart();
     testPointRateChangeBeforeBeginWaitsForBeginRate();
     testFillRequestLeavesOnePointWriteHeadroom();
-    testHighPointRateUsesTimeBasedPacketCap();
+    testHighPointRateUsesLegacyPacketCap();
     testPreparedStartupRequestsUntilBeginThreshold();
     testDataNakWithPartialFullStatusCanBeBufferOverrun();
     testOlderEtherDreamOnlyTreatsZeroPlayingBufferAsUnderrun();
@@ -674,6 +709,7 @@ int main() {
     testPreSendUnderrunAppliesStartupBlankToCurrentPacket();
     testBufferOverrunArmsStartupBlankForNextPacket();
     testPlayingBelowUnderrunThresholdRequestsPointsImmediately();
+    testNormalRequestGateUsesTargetDeficitOrFreeSpace();
 
     if (g_failures) {
         logError("Tests failed", g_failures, "failure(s)");
