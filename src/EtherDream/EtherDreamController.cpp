@@ -183,7 +183,7 @@ expected<void> EtherDreamController::connect() {
     libera::net::tcp::endpoint endpoint(ip, controllerInfo->port());
 
     // Set timeouts before connecting so they apply to this and all future attempts.
-    tcpClient.setDefaultTimeout(200ms);
+    tcpClient.setDefaultTimeout(config::ETHERDREAM_COMMAND_TIMEOUT);
     tcpClient.setConnectTimeout(1s);
 
     if (auto connectError = tcpClient.connect(endpoint); connectError) {

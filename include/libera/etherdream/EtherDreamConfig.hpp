@@ -35,12 +35,22 @@ constexpr std::size_t ETHERDREAM_MAX_PACKET_POINTS = 3640;
 
 constexpr std::chrono::milliseconds ETHERDREAM_MIN_SLEEP{1};
 constexpr std::chrono::milliseconds ETHERDREAM_MAX_SLEEP{50};
+// Real Ether Dreams can occasionally pause command send/ACK completion for a
+// few hundred milliseconds without losing the TCP session. Keep this below the
+// old 1s Poco timeout, but above normal LAN jitter so minor stalls do not force
+// a full close/reconnect cycle.
+constexpr std::chrono::milliseconds ETHERDREAM_COMMAND_TIMEOUT{500};
 // Match the legacy fixed reconnect cadence for the first retry, then back off
 // if a DAC is genuinely unavailable.
 constexpr std::chrono::milliseconds ETHERDREAM_RECONNECT_INITIAL_DELAY{100};
 constexpr std::chrono::milliseconds ETHERDREAM_RECONNECT_BACKOFF_DELAY{250};
 constexpr std::chrono::milliseconds ETHERDREAM_RECONNECT_MAX_DELAY{1000};
-constexpr std::chrono::seconds ETHERDREAM_RECONNECT_STABLE_RESET_TIME{2};
+// If the replacement connection survives beyond a single command timeout,
+// treat later failures as intermittent rather than continuing an old
+// exponential backoff streak.
+constexpr std::chrono::seconds ETHERDREAM_RECONNECT_STABLE_RESET_TIME{1};
+static_assert(ETHERDREAM_RECONNECT_STABLE_RESET_TIME > ETHERDREAM_COMMAND_TIMEOUT,
+              "Reconnect stable reset must exceed the command timeout");
 
 // Newer EtherDream hardware (v3/v4) uses DMA batches internally; keep at least
 // this many points buffered to avoid underruns when running at low point rates.
