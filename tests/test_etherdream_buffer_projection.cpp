@@ -77,20 +77,20 @@ public:
         controller.pendingRateChangeCount = count;
     }
 
-    static bool stopRequired(const EtherDreamController& controller) {
-        return controller.stopRequired;
+    static bool hasStopAction(const EtherDreamController& controller) {
+        return controller.playbackAction == EtherDreamController::PlaybackAction::Stop;
     }
 
-    static bool clearRequired(const EtherDreamController& controller) {
-        return controller.clearRequired;
+    static bool hasClearAction(const EtherDreamController& controller) {
+        return controller.playbackAction == EtherDreamController::PlaybackAction::Clear;
     }
 
-    static bool prepareRequired(const EtherDreamController& controller) {
-        return controller.prepareRequired;
+    static bool hasPrepareAction(const EtherDreamController& controller) {
+        return controller.playbackAction == EtherDreamController::PlaybackAction::Prepare;
     }
 
-    static bool beginRequired(const EtherDreamController& controller) {
-        return controller.beginRequired;
+    static bool hasBeginAction(const EtherDreamController& controller) {
+        return controller.playbackAction == EtherDreamController::PlaybackAction::Begin;
     }
 
     static int beginBufferThresholdPoints(const EtherDreamController& controller) {
@@ -274,13 +274,13 @@ void testImplausibleReportedPointRateForcesReset() {
 
     EtherDreamControllerTestAccess::updatePlaybackRequirements(*controller, status);
 
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::stopRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasStopAction(*controller),
                 "first implausible active point rate should not immediately force reboot stop");
-    ASSERT_TRUE(EtherDreamControllerTestAccess::clearRequired(*controller),
+    ASSERT_TRUE(EtherDreamControllerTestAccess::hasClearAction(*controller),
                 "first implausible active point rate should attempt clear recovery");
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::prepareRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasPrepareAction(*controller),
                 "implausible active point rate reset should not prepare until clear completes");
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::beginRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasBeginAction(*controller),
                 "implausible active point rate reset should not begin until stream is rebuilt");
 
     const std::string rebootRequiredCode(core::error_types::etherdream::rebootRequired);
@@ -291,13 +291,13 @@ void testImplausibleReportedPointRateForcesReset() {
 
     EtherDreamControllerTestAccess::updatePlaybackRequirements(*controller, status);
 
-    ASSERT_TRUE(EtherDreamControllerTestAccess::stopRequired(*controller),
+    ASSERT_TRUE(EtherDreamControllerTestAccess::hasStopAction(*controller),
                 "repeated implausible active point rate after recovery should force stop");
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::clearRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasClearAction(*controller),
                 "repeated implausible active point rate should not keep scheduling clear recovery");
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::prepareRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasPrepareAction(*controller),
                 "repeated implausible active point rate should not prepare until stop/reconnect");
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::beginRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasBeginAction(*controller),
                 "repeated implausible active point rate should not begin until stream is rebuilt");
 
     bool foundRebootRequired = false;
@@ -320,11 +320,11 @@ void testPointRateChangeWhilePlayingSchedulesRestart() {
     controller->setPointRate(20000);
     EtherDreamControllerTestAccess::syncPointRate(*controller);
 
-    ASSERT_TRUE(EtherDreamControllerTestAccess::stopRequired(*controller),
+    ASSERT_TRUE(EtherDreamControllerTestAccess::hasStopAction(*controller),
                 "active Ether Dream point-rate changes should restart playback");
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::prepareRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasPrepareAction(*controller),
                 "rate-change restart should stop before preparing");
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::beginRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasBeginAction(*controller),
                 "rate-change restart should not begin until data is prepared again");
     ASSERT_EQ(EtherDreamControllerTestAccess::pendingRateChangeCount(*controller),
               static_cast<std::size_t>(0),
@@ -339,7 +339,7 @@ void testPointRateChangeBeforeBeginWaitsForBeginRate() {
     controller->setPointRate(20000);
     EtherDreamControllerTestAccess::syncPointRate(*controller);
 
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::stopRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasStopAction(*controller),
                 "before playback starts, begin command will carry the requested rate");
 }
 
@@ -387,7 +387,7 @@ void testPreparedStartupRequestsUntilBeginThreshold() {
     status.pointRate = 0;
 
     EtherDreamControllerTestAccess::updatePlaybackRequirements(*controller, status);
-    ASSERT_TRUE(!EtherDreamControllerTestAccess::beginRequired(*controller),
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::hasBeginAction(*controller),
                 "prepared Ether Dream should wait for the latency-derived begin threshold");
 
     const auto request = EtherDreamControllerTestAccess::getFillRequest(*controller);
@@ -399,7 +399,7 @@ void testPreparedStartupRequestsUntilBeginThreshold() {
     status.bufferFullness = static_cast<std::uint16_t>(
         EtherDreamControllerTestAccess::beginBufferThresholdPoints(*controller));
     EtherDreamControllerTestAccess::updatePlaybackRequirements(*controller, status);
-    ASSERT_TRUE(EtherDreamControllerTestAccess::beginRequired(*controller),
+    ASSERT_TRUE(EtherDreamControllerTestAccess::hasBeginAction(*controller),
                 "prepared Ether Dream should begin once the latency-derived threshold is buffered");
 }
 
@@ -649,15 +649,15 @@ void testPlayingBelowUnderrunThresholdRequestsPointsImmediately() {
         static_cast<int>(config::ETHERDREAM_MIN_BUFFER_POINTS),
         static_cast<int>(config::ETHERDREAM_MIN_BUFFER_POINTS),
         0ms);
-    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
-                "playing at threshold should use the normal legacy free-space gate");
-
-    request.maximumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS;
     ASSERT_TRUE(!EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
-                "normal legacy gate should be strict: exactly the threshold is not enough");
+                "playing at threshold should not bypass the normal target-deficit gate");
+
+    request.maximumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS;
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "normal refill gate should wait when the target deficit is below the refill threshold");
 }
 
-void testNormalRequestGateUsesTargetDeficitOrFreeSpace() {
+void testNormalRequestGateUsesTargetDeficit() {
     auto controller = makeController(30);
     setStatus(*controller,
               PlaybackState::Playing,
@@ -673,19 +673,29 @@ void testNormalRequestGateUsesTargetDeficitOrFreeSpace() {
 
     core::PointFillRequest request{};
     request.minimumPointsRequired = 0;
-    request.maximumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS + 1;
-    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
-                "legacy gate should request points when useful FIFO space is available");
-
-    request.minimumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS + 1;
-    request.maximumPointsRequired = 0;
-    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
-                "legacy gate should request points when the target deficit is large enough");
-
-    request.minimumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS;
-    request.maximumPointsRequired = config::ETHERDREAM_MIN_PACKET_POINTS;
+    request.maximumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS + 1;
     ASSERT_TRUE(!EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
-                "legacy gate should match the old strict greater-than threshold");
+                "normal playback should not request a packet just because FIFO space is available");
+
+    request.minimumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS - 1;
+    request.maximumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS + 1;
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "normal playback should wait while the target deficit is below the refill threshold");
+
+    request.minimumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS;
+    request.maximumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS + 1;
+    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "normal playback should request once the target deficit reaches the refill threshold");
+
+    request.minimumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS + 1;
+    request.maximumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS + 1;
+    ASSERT_TRUE(EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "normal playback should request when the target deficit exceeds the refill threshold");
+
+    request.minimumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS - 1;
+    request.maximumPointsRequired = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS;
+    ASSERT_TRUE(!EtherDreamControllerTestAccess::shouldRequestPoints(*controller, request),
+                "normal playback should still wait when only exact-threshold FIFO space is available");
 }
 
 } // namespace
@@ -709,7 +719,7 @@ int main() {
     testPreSendUnderrunAppliesStartupBlankToCurrentPacket();
     testBufferOverrunArmsStartupBlankForNextPacket();
     testPlayingBelowUnderrunThresholdRequestsPointsImmediately();
-    testNormalRequestGateUsesTargetDeficitOrFreeSpace();
+    testNormalRequestGateUsesTargetDeficit();
 
     if (g_failures) {
         logError("Tests failed", g_failures, "failure(s)");

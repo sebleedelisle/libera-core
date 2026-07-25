@@ -27,10 +27,9 @@ constexpr std::size_t ETHERDREAM_SINGLE_SEGMENT_PAYLOAD_BYTES = 1400;
 constexpr std::size_t ETHERDREAM_SINGLE_SEGMENT_MAX_PACKET_POINTS =
     (ETHERDREAM_SINGLE_SEGMENT_PAYLOAD_BYTES - ETHERDREAM_DATA_COMMAND_HEADER_BYTES) /
     ETHERDREAM_DATA_POINT_BYTES;
-// Legacy 1.0.3-style streaming: request when there is a meaningful deficit or
-// meaningful FIFO space, then let the frame scheduler produce a variable-sized
-// chunk up to the available space rather than forcing single-MTU refills.
-constexpr std::size_t ETHERDREAM_MIN_PACKET_POINTS = 150;
+// Normal playback refill trigger. Startup, underrun, and recovery paths may
+// request smaller batches; this is not a hard minimum data-command size.
+constexpr std::size_t ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS = 150;
 constexpr std::size_t ETHERDREAM_MAX_PACKET_POINTS = 3640;
 
 constexpr std::chrono::milliseconds ETHERDREAM_MIN_SLEEP{1};

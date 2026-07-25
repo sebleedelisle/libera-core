@@ -68,22 +68,43 @@ std::uint32_t readLe32(const std::uint8_t* data) {
         | (static_cast<std::uint32_t>(data[3]) << 24);
 }
 
+struct StreamOrderScenario {
+    const char* name = "";
+    libera::etherdream::PlaybackState initialPlaybackState =
+        libera::etherdream::PlaybackState::Idle;
+    std::uint16_t preparedBufferAfterPrepare = 0;
+    std::size_t expectedBeginCount = 1;
+    bool injectUnderflowAfterFirstBegin = false;
+    bool expectUnderflowRecorded = false;
+    bool injectPlaybackIdleNakAfterFirstBegin = false;
+    bool expectPlaybackIdleRecorded = false;
+    bool injectBufferFullNakAfterFirstBegin = false;
+    bool expectBufferOverrunRecorded = false;
+    bool injectStopConditionOnFirstClear = false;
+    bool expectStopConditionRecorded = false;
+    bool changePointRateAfterFirstBegin = false;
+};
+
+StreamOrderScenario makeScenario(
+    const char* name,
+    libera::etherdream::PlaybackState initialPlaybackState =
+        libera::etherdream::PlaybackState::Idle) {
+    StreamOrderScenario scenario;
+    scenario.name = name;
+    scenario.initialPlaybackState = initialPlaybackState;
+    return scenario;
+}
+
 class EtherDreamLoopbackServer {
 public:
-    explicit EtherDreamLoopbackServer(
-        libera::etherdream::PlaybackState initialPlaybackState =
-            libera::etherdream::PlaybackState::Idle,
-        std::uint16_t preparedBufferAfterPrepare = 0,
-        bool injectUnderflowAfterFirstBegin = false,
-        bool injectPlaybackIdleNakAfterFirstBegin = false,
-        bool injectBufferFullNakAfterFirstBegin = false,
-        bool injectStopConditionOnFirstClear = false)
-    : initialPlaybackState(initialPlaybackState)
-    , preparedBufferAfterPrepare(preparedBufferAfterPrepare)
-    , injectUnderflowAfterFirstBegin(injectUnderflowAfterFirstBegin)
-    , injectPlaybackIdleNakAfterFirstBegin(injectPlaybackIdleNakAfterFirstBegin)
-    , injectBufferFullNakAfterFirstBegin(injectBufferFullNakAfterFirstBegin)
-    , injectStopConditionOnFirstClear(injectStopConditionOnFirstClear) {
+    explicit EtherDreamLoopbackServer(const StreamOrderScenario& scenario)
+    : initialPlaybackState(scenario.initialPlaybackState)
+    , preparedBufferAfterPrepare(scenario.preparedBufferAfterPrepare)
+    , injectUnderflowAfterFirstBegin(scenario.injectUnderflowAfterFirstBegin)
+    , injectPlaybackIdleNakAfterFirstBegin(
+          scenario.injectPlaybackIdleNakAfterFirstBegin)
+    , injectBufferFullNakAfterFirstBegin(scenario.injectBufferFullNakAfterFirstBegin)
+    , injectStopConditionOnFirstClear(scenario.injectStopConditionOnFirstClear) {
         listenFd = ::socket(AF_INET, SOCK_STREAM, 0);
         ASSERT_TRUE(listenFd >= 0, "socket");
 
@@ -286,7 +307,7 @@ private:
         bool playbackIdleNakInjected = false;
         bool bufferFullNakInjected = false;
         bool stopConditionInjected = false;
-        bool clearRequiredAfterDataNak = false;
+        bool expectClearAfterDataNak = false;
         std::size_t localBeginCount = 0;
         std::uint16_t bufferedPoints = 0;
         std::uint32_t activePointRate = 0;
@@ -301,7 +322,7 @@ private:
             const char command = static_cast<char>(opcode);
             recordCommand(command);
 
-            if (clearRequiredAfterDataNak && command != 'c') {
+            if (expectClearAfterDataNak && command != 'c') {
                 fail("data NAK recovery did not clear before preparing or beginning");
                 return;
             }
@@ -345,7 +366,7 @@ private:
                         0);
                 preparedSeen = false;
                 firstDataSeen = false;
-                clearRequiredAfterDataNak = false;
+                expectClearAfterDataNak = false;
                 bufferedPoints = 0;
                 activePointRate = 0;
                 playing = false;
@@ -398,7 +419,7 @@ private:
                     playbackIdleNakInjected = true;
                     preparedSeen = false;
                     firstDataSeen = false;
-                    clearRequiredAfterDataNak = true;
+                    expectClearAfterDataNak = true;
                     bufferedPoints = 0;
                     playing = false;
                     sendAck(client,
@@ -415,7 +436,7 @@ private:
                     bufferFullNakInjected = true;
                     preparedSeen = true;
                     firstDataSeen = true;
-                    clearRequiredAfterDataNak = true;
+                    expectClearAfterDataNak = true;
                     bufferedPoints = 4096;
                     playing = false;
                     sendAck(client,
@@ -530,25 +551,8 @@ libera::core::Frame makeFrame(std::size_t pointCount) {
 
 } // namespace
 
-bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackState,
-                            const char* scenarioName,
-                            std::uint16_t preparedBufferAfterPrepare = 0,
-                            bool injectUnderflowAfterFirstBegin = false,
-                            std::size_t expectedBeginCount = 1,
-                            bool expectUnderflowRecorded = false,
-                            bool injectPlaybackIdleNakAfterFirstBegin = false,
-                            bool expectPlaybackIdleRecorded = false,
-                            bool injectBufferFullNakAfterFirstBegin = false,
-                            bool expectBufferOverrunRecorded = false,
-                            bool injectStopConditionOnFirstClear = false,
-                            bool expectStopConditionRecorded = false,
-                            bool changePointRateAfterFirstBegin = false) {
-    EtherDreamLoopbackServer server(initialPlaybackState,
-                                    preparedBufferAfterPrepare,
-                                    injectUnderflowAfterFirstBegin,
-                                    injectPlaybackIdleNakAfterFirstBegin,
-                                    injectBufferFullNakAfterFirstBegin,
-                                    injectStopConditionOnFirstClear);
+bool runStreamOrderScenario(const StreamOrderScenario& scenario) {
+    EtherDreamLoopbackServer server(scenario);
     libera::core::LaserController::setTargetLatency(0ms);
 
     libera::etherdream::EtherDreamController controller;
@@ -571,16 +575,16 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
     controller.startThread();
 
     bool began = false;
-    if (changePointRateAfterFirstBegin) {
+    if (scenario.changePointRateAfterFirstBegin) {
         began = server.waitForBeginCount(1, 2s);
         if (began) {
             controller.setPointRate(20000);
             ASSERT_TRUE(controller.sendFrame(makeFrame(1000)),
                         "second frame queued after point-rate change");
-            began = server.waitForBeginCount(expectedBeginCount, 2s);
+            began = server.waitForBeginCount(scenario.expectedBeginCount, 2s);
         }
     } else {
-        began = server.waitForBeginCount(expectedBeginCount, 2s);
+        began = server.waitForBeginCount(scenario.expectedBeginCount, 2s);
     }
 
     controller.stopThread();
@@ -591,12 +595,12 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
         const auto violation = server.violation();
         if (!violation.empty()) {
             std::fprintf(stderr, "EtherDream stream order violation (%s): %s\n",
-                         scenarioName,
+                         scenario.name,
                          violation.c_str());
         } else {
             const auto commands = server.commands();
             std::fprintf(stderr, "EtherDream stream order timed out (%s). Commands:",
-                         scenarioName);
+                         scenario.name);
             for (char command : commands) {
                 std::fprintf(stderr, " %c", command);
             }
@@ -605,7 +609,7 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
         return false;
     }
 
-    if (expectUnderflowRecorded) {
+    if (scenario.expectUnderflowRecorded) {
         bool underflowRecorded = false;
         bool protocolErrorRecorded = false;
         for (const auto& error : controller.getErrors()) {
@@ -619,18 +623,18 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
         if (!underflowRecorded) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): underflow was not recorded\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
         if (protocolErrorRecorded) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): underflow was reported with protocol error\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
     }
 
-    if (expectPlaybackIdleRecorded) {
+    if (scenario.expectPlaybackIdleRecorded) {
         bool playbackIdleRecorded = false;
         bool protocolErrorRecorded = false;
         for (const auto& error : controller.getErrors()) {
@@ -644,18 +648,18 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
         if (!playbackIdleRecorded) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): playback idle was not recorded\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
         if (protocolErrorRecorded) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): playback idle was reported as protocol error\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
     }
 
-    if (expectBufferOverrunRecorded) {
+    if (scenario.expectBufferOverrunRecorded) {
         bool bufferOverrunRecorded = false;
         bool protocolErrorRecorded = false;
         for (const auto& error : controller.getErrors()) {
@@ -669,18 +673,18 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
         if (!bufferOverrunRecorded) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): buffer overrun was not recorded\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
         if (protocolErrorRecorded) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): full data rejection was reported as protocol error\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
     }
 
-    if (expectStopConditionRecorded) {
+    if (scenario.expectStopConditionRecorded) {
         bool stopConditionRecorded = false;
         bool protocolErrorRecorded = false;
         for (const auto& error : controller.getErrors()) {
@@ -694,24 +698,24 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
         if (!stopConditionRecorded) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): stop condition was not recorded\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
         if (protocolErrorRecorded) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): stop condition was reported as protocol error\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
     }
 
-    if (changePointRateAfterFirstBegin) {
+    if (scenario.changePointRateAfterFirstBegin) {
         const auto commands = server.commands();
         for (char command : commands) {
             if (command == 'q') {
                 std::fprintf(stderr,
                              "EtherDream stream order violation (%s): point-rate change used q instead of restart\n",
-                             scenarioName);
+                             scenario.name);
                 return false;
             }
         }
@@ -719,7 +723,7 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
         if (beginRates.size() < 2 || beginRates[0] != 30000u || beginRates[1] != 20000u) {
             std::fprintf(stderr,
                          "EtherDream stream order violation (%s): begin rates did not show restart at new rate\n",
-                         scenarioName);
+                         scenario.name);
             return false;
         }
     }
@@ -728,75 +732,59 @@ bool runStreamOrderScenario(libera::etherdream::PlaybackState initialPlaybackSta
 }
 
 int main() {
-    if (!runStreamOrderScenario(libera::etherdream::PlaybackState::Idle, "idle startup")) {
+    constexpr std::uint16_t partialPreparedBufferAfterPrepare =
+        static_cast<std::uint16_t>(
+            libera::etherdream::config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS - 1);
+
+    if (!runStreamOrderScenario(makeScenario("idle startup"))) {
         return 1;
     }
-    if (!runStreamOrderScenario(libera::etherdream::PlaybackState::Prepared, "prepared startup")) {
+    if (!runStreamOrderScenario(
+            makeScenario("prepared startup", libera::etherdream::PlaybackState::Prepared))) {
         return 1;
     }
-    if (!runStreamOrderScenario(libera::etherdream::PlaybackState::Idle,
-                                "partial prepared buffer after prepare",
-                                static_cast<std::uint16_t>(
-                                    libera::etherdream::config::ETHERDREAM_MIN_PACKET_POINTS - 1))) {
+
+    auto partialPrepared = makeScenario("partial prepared buffer after prepare");
+    partialPrepared.preparedBufferAfterPrepare = partialPreparedBufferAfterPrepare;
+    if (!runStreamOrderScenario(partialPrepared)) {
         return 1;
     }
-    if (!runStreamOrderScenario(libera::etherdream::PlaybackState::Idle,
-                                "underflow recovery",
-                                0,
-                                true,
-                                2,
-                                true)) {
+
+    auto underflowRecovery = makeScenario("underflow recovery");
+    underflowRecovery.injectUnderflowAfterFirstBegin = true;
+    underflowRecovery.expectedBeginCount = 2;
+    underflowRecovery.expectUnderflowRecorded = true;
+    if (!runStreamOrderScenario(underflowRecovery)) {
         return 1;
     }
-    if (!runStreamOrderScenario(libera::etherdream::PlaybackState::Idle,
-                                "playback idle NAK recovery",
-                                0,
-                                false,
-                                2,
-                                true,
-                                true,
-                                false)) {
+
+    auto playbackIdleNakRecovery = makeScenario("playback idle NAK recovery");
+    playbackIdleNakRecovery.expectedBeginCount = 2;
+    playbackIdleNakRecovery.expectUnderflowRecorded = true;
+    playbackIdleNakRecovery.injectPlaybackIdleNakAfterFirstBegin = true;
+    if (!runStreamOrderScenario(playbackIdleNakRecovery)) {
         return 1;
     }
-    if (!runStreamOrderScenario(libera::etherdream::PlaybackState::Idle,
-                                "full data NAK classification",
-                                0,
-                                false,
-                                2,
-                                false,
-                                false,
-                                false,
-                                true,
-                                true)) {
+
+    auto fullDataNakClassification = makeScenario("full data NAK classification");
+    fullDataNakClassification.expectedBeginCount = 2;
+    fullDataNakClassification.injectBufferFullNakAfterFirstBegin = true;
+    fullDataNakClassification.expectBufferOverrunRecorded = true;
+    if (!runStreamOrderScenario(fullDataNakClassification)) {
         return 1;
     }
-    if (!runStreamOrderScenario(libera::etherdream::PlaybackState::Idle,
-                                "stop condition recovery",
-                                0,
-                                false,
-                                1,
-                                false,
-                                false,
-                                false,
-                                false,
-                                false,
-                                true,
-                                true)) {
+
+    auto stopConditionRecovery = makeScenario("stop condition recovery");
+    stopConditionRecovery.injectStopConditionOnFirstClear = true;
+    stopConditionRecovery.expectStopConditionRecorded = true;
+    if (!runStreamOrderScenario(stopConditionRecovery)) {
         return 1;
     }
-    if (!runStreamOrderScenario(libera::etherdream::PlaybackState::Idle,
-                                "point-rate change restart",
-                                0,
-                                false,
-                                2,
-                                false,
-                                false,
-                                false,
-                                false,
-                                false,
-                                false,
-                                false,
-                                true)) {
+
+    auto pointRateChangeRestart = makeScenario("point-rate change restart");
+    pointRateChangeRestart.expectedBeginCount = 2;
+    pointRateChangeRestart.changePointRateAfterFirstBegin = true;
+    if (!runStreamOrderScenario(pointRateChangeRestart)) {
         return 1;
     }
 

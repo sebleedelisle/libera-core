@@ -112,6 +112,10 @@ bool statusLooksFullForDataReject(const EtherDreamStatus& status, int bufferSize
     return reportedFullness >= std::max(0, bufferSize - 1);
 }
 
+bool responseMatchesCommand(const EtherDreamResponse& response, char command) {
+    return static_cast<char>(response.command) == command;
+}
+
 double durationMillis(std::chrono::steady_clock::duration duration) {
     return std::chrono::duration<double, std::milli>(duration).count();
 }
@@ -253,28 +257,25 @@ void EtherDreamController::run() {
         resetStartupBlank();
 
         while (running && connectionActive) {
-            if (stopRequired) {
-                sendStop();
-                continue;
-            }
-
-            if (clearRequired) {
-                sendClear();
-                continue;
-            }
-
-            if (prepareRequired) {
-                sendPrepare();
-                continue;
-            }
-
-            if (beginRequired) {
-                sendBegin();
-                continue;
+            switch (playbackAction) {
+                case PlaybackAction::Stop:
+                    sendStop();
+                    continue;
+                case PlaybackAction::Clear:
+                    sendClear();
+                    continue;
+                case PlaybackAction::Prepare:
+                    sendPrepare();
+                    continue;
+                case PlaybackAction::Begin:
+                    sendBegin();
+                    continue;
+                case PlaybackAction::None:
+                    break;
             }
 
             syncPointRate();
-            if (stopRequired || clearRequired || prepareRequired || beginRequired) {
+            if (playbackAction != PlaybackAction::None) {
                 continue;
             }
 
@@ -316,163 +317,229 @@ void EtherDreamController::run() {
     }
 }
 
-expected<Ack>
+EtherDreamController::CommandResult
 EtherDreamController::waitForResponse(char command,
                                       bool allowWhileStopping,
                                       std::uint64_t sequence) {
     if (!running && !allowWhileStopping) {
-        return unexpected(std::make_error_code(std::errc::operation_canceled));
+        return CommandResult::failure(
+            CommandFailureKind::Shutdown,
+            std::make_error_code(std::errc::operation_canceled));
     }
     if (!tcpClient.is_connected()) {
-        return unexpected(make_error_code(std::errc::not_connected));
+        return CommandResult::failure(
+            CommandFailureKind::NetworkFailure,
+            make_error_code(std::errc::not_connected));
     }
 
-    std::array<std::uint8_t, 22> raw{};
-
-    while (true) {
-        std::size_t bytesTransferred = 0;
-        if (auto ec = tcpClient.read_exact(raw.data(), raw.size(), &bytesTransferred); ec) {
-            const auto partialBytes = std::min<std::size_t>(bytesTransferred, raw.size());
-            if (ec == asio::error::timed_out) {
-                logError("[EtherDream] RX timeout waiting for command", command,
-                         "conn", connectionGeneration,
-                         "seq", sequence,
-                         "bytes", bytesTransferred,
-                         "partial_hex", EtherDreamStatus::toHexLine(raw.data(), partialBytes),
-                         "tx", describeProtocolTx(sequence));
-                recordIntermittentError(error_types::network::timeout);
-            } else {
-                logError("[EtherDream] RX error", ec.value(), ec.category().name(), ec.message(),
-                         "conn", connectionGeneration,
-                         "seq", sequence,
-                         "cmd", command,
-                         "bytes", bytesTransferred,
-                         "partial_hex", EtherDreamStatus::toHexLine(raw.data(), partialBytes),
-                         "tx", describeProtocolTx(sequence));
-            }
-            recordConnectionError(error_types::network::receiveFailed);
-            return unexpected(std::error_code(ec.value(), ec.category()));
-        }
-
-        EtherDreamResponse response;
-        if (!response.decode(raw.data(), raw.size())) {
-            logError("[EtherDreamController] Failed to decode ACK for command", command,
-                     "conn", connectionGeneration,
-                     "seq", sequence,
-                     "hex", EtherDreamStatus::toHexLine(raw.data(), raw.size()),
-                     "tx", describeProtocolTx(sequence));
-            recordIntermittentError(error_types::network::protocolError);
-            return unexpected(make_error_code(std::errc::protocol_error));
-        }
-
-        logProtocolRx(sequence, command, response, raw.data(), raw.size());
-
-        if (response.response == '!' && static_cast<char>(response.command) == command) {
-            updatePlaybackRequirements(response.status, sequence);
-            logError("[EtherDream] stop condition active for command", command,
-                     "conn", connectionGeneration,
-                     "seq", sequence,
-                     "sts", response.status.describe(),
-                     "hex", EtherDreamStatus::toHexLine(raw.data(), raw.size()),
-                     "tx", describeProtocolTx(sequence));
-            recordIntermittentError(error_types::etherdream::stopCondition);
-            return unexpected(make_error_code(std::errc::operation_canceled));
-        }
-
-        // 'I' is a NAK for an invalid command. The accompanying status tells us
-        // which recovery command should come next.
-        if (response.response == 'I' && static_cast<char>(response.command) == command) {
-            updatePlaybackRequirements(response.status, sequence);
-            const bool dataRejectedBecausePlaybackIdle =
-                command == 'd'
-                && response.status.lightEngineState == LightEngineState::Ready
-                && response.status.playbackState == PlaybackState::Idle;
-            const bool dataRejectedBecauseBufferFull =
-                command == 'd'
-                && response.status.lightEngineState == LightEngineState::Ready
-                && isPlaybackStateThatCanHoldBufferedData(response.status.playbackState)
-                && (statusLooksFullForDataReject(response.status, getBufferSize())
-                    || dataPacketWouldOverflowBuffer(response.status, sequence));
-            if (dataRejectedBecausePlaybackIdle) {
-                if (response.status.hasPlaybackUnderflow()) {
-                    logInfo("[EtherDream] data command rejected after playback underflow",
-                            "conn", connectionGeneration,
-                            "seq", sequence,
-                            "sts", response.status.describe(),
-                            "hex", EtherDreamStatus::toHexLine(raw.data(), raw.size()),
-                            "tx", describeProtocolTx(sequence));
-                    recordIntermittentError(error_types::network::bufferUnderflow);
-                } else {
-                    logInfo("[EtherDream] data command rejected because playback is idle after underrun",
-                            "conn", connectionGeneration,
-                            "seq", sequence,
-                            "sts", response.status.describe(),
-                            "hex", EtherDreamStatus::toHexLine(raw.data(), raw.size()),
-                            "tx", describeProtocolTx(sequence));
-                    recordIntermittentError(error_types::network::bufferUnderflow);
-                }
-                resetStartupBlank();
-                scheduleClearRecovery("invalid_data_idle", response.status, sequence);
-                return unexpected(make_error_code(std::errc::operation_canceled));
-            }
-            if (dataRejectedBecauseBufferFull) {
-                logError("[EtherDream] data command rejected because DAC buffer is full",
-                         "conn", connectionGeneration,
-                         "seq", sequence,
-                         "sts", response.status.describe(),
-                         "hex", EtherDreamStatus::toHexLine(raw.data(), raw.size()),
-                         "tx", describeProtocolTx(sequence));
-                recordBufferOverrun();
-                scheduleClearRecovery("invalid_data_buffer_full", response.status, sequence);
-                return unexpected(make_error_code(std::errc::operation_canceled));
-            }
-            logError("[EtherDream] NAK invalid command", command,
-                     "conn", connectionGeneration,
-                     "seq", sequence,
-                     "sts", response.status.describe(),
-                     "hex", EtherDreamStatus::toHexLine(raw.data(), raw.size()),
-                     "tx", describeProtocolTx(sequence));
-            recordIntermittentError(error_types::network::protocolError);
-            if (command == 'd') {
-                scheduleClearRecovery("invalid_data_command", response.status, sequence);
-            }
-            return unexpected(make_error_code(std::errc::operation_canceled));
-        }
-
-        if (response.response == 'F' && static_cast<char>(response.command) == command) {
-            updatePlaybackRequirements(response.status, sequence);
-            logError("[EtherDream] NAK buffer full for command", command,
-                     "conn", connectionGeneration,
-                     "seq", sequence,
-                     "sts", response.status.describe(),
-                     "hex", EtherDreamStatus::toHexLine(raw.data(), raw.size()),
-                     "tx", describeProtocolTx(sequence));
-            recordBufferOverrun();
-            if (command == 'd') {
-                scheduleClearRecovery("data_buffer_full", response.status, sequence);
-            }
-            return unexpected(make_error_code(std::errc::operation_canceled));
-        }
-
-        const bool ackMatched = (response.response == 'a') &&
-                                (static_cast<char>(response.command) == command);
-
-        updatePlaybackRequirements(response.status, sequence);
-
-        if (!ackMatched) {
-            logError("[EtherDream] unexpected ACK expected", command,
-                     "conn", connectionGeneration,
-                     "seq", sequence,
-                     "got response", static_cast<char>(response.response),
-                     "for command", static_cast<char>(response.command),
-                     "hex", EtherDreamStatus::toHexLine(raw.data(), raw.size()),
-                     "tx", describeProtocolTx(sequence));
-            recordIntermittentError(error_types::network::protocolError);
-            return unexpected(make_error_code(std::errc::protocol_error));
-        }
-
-        return Ack{response.status, static_cast<char>(response.command)};
+    auto frame = readResponseFrame(command, sequence);
+    if (!frame) {
+        return CommandResult::failure(
+            commandFailureKindForResponseReadError(frame.error()),
+            frame.error());
     }
+
+    logProtocolRx(sequence, command, frame->response, frame->raw.data(), frame->rawSize);
+    return handleResponseFrame(command, sequence, *frame);
+}
+
+expected<EtherDreamController::ResponseFrame>
+EtherDreamController::readResponseFrame(char command, std::uint64_t sequence) {
+    ResponseFrame frame;
+    frame.rawSize = frame.raw.size();
+
+    std::size_t bytesTransferred = 0;
+    if (auto ec = tcpClient.read_exact(frame.raw.data(), frame.raw.size(), &bytesTransferred); ec) {
+        const auto partialBytes = std::min<std::size_t>(bytesTransferred, frame.raw.size());
+        if (ec == asio::error::timed_out) {
+            logError("[EtherDream] RX timeout waiting for command", command,
+                     "conn", connectionGeneration,
+                     "seq", sequence,
+                     "bytes", bytesTransferred,
+                     "partial_hex", EtherDreamStatus::toHexLine(frame.raw.data(), partialBytes),
+                     "tx", describeProtocolTx(sequence));
+            recordIntermittentError(error_types::network::timeout);
+        } else {
+            logError("[EtherDream] RX error", ec.value(), ec.category().name(), ec.message(),
+                     "conn", connectionGeneration,
+                     "seq", sequence,
+                     "cmd", command,
+                     "bytes", bytesTransferred,
+                     "partial_hex", EtherDreamStatus::toHexLine(frame.raw.data(), partialBytes),
+                     "tx", describeProtocolTx(sequence));
+        }
+        recordConnectionError(error_types::network::receiveFailed);
+        return unexpected(std::error_code(ec.value(), ec.category()));
+    }
+
+    if (!frame.response.decode(frame.raw.data(), frame.raw.size())) {
+        logError("[EtherDreamController] Failed to decode ACK for command", command,
+                 "conn", connectionGeneration,
+                 "seq", sequence,
+                 "hex", EtherDreamStatus::toHexLine(frame.raw.data(), frame.raw.size()),
+                 "tx", describeProtocolTx(sequence));
+        recordIntermittentError(error_types::network::protocolError);
+        return unexpected(make_error_code(std::errc::protocol_error));
+    }
+
+    return frame;
+}
+
+EtherDreamController::CommandResult
+EtherDreamController::handleResponseFrame(char command,
+                                          std::uint64_t sequence,
+                                          const ResponseFrame& frame) {
+    const auto& response = frame.response;
+
+    if (response.response == '!' && responseMatchesCommand(response, command)) {
+        return handleStopConditionResponse(command, sequence, frame);
+    }
+
+    if (response.response == 'I' && responseMatchesCommand(response, command)) {
+        return handleInvalidCommandResponse(command, sequence, frame);
+    }
+
+    if (response.response == 'F' && responseMatchesCommand(response, command)) {
+        return handleBufferFullResponse(command, sequence, frame);
+    }
+
+    updatePlaybackRequirements(response.status, sequence);
+
+    if (response.response != 'a' || !responseMatchesCommand(response, command)) {
+        return handleUnexpectedResponse(command, sequence, frame);
+    }
+
+    return CommandResult::success(
+        Ack{response.status, static_cast<char>(response.command)});
+}
+
+EtherDreamController::CommandResult
+EtherDreamController::handleStopConditionResponse(char command,
+                                                  std::uint64_t sequence,
+                                                  const ResponseFrame& frame) {
+    const auto& response = frame.response;
+    updatePlaybackRequirements(response.status, sequence);
+    logError("[EtherDream] stop condition active for command", command,
+             "conn", connectionGeneration,
+             "seq", sequence,
+             "sts", response.status.describe(),
+             "hex", EtherDreamStatus::toHexLine(frame.raw.data(), frame.rawSize),
+             "tx", describeProtocolTx(sequence));
+    recordIntermittentError(error_types::etherdream::stopCondition);
+    return CommandResult::failure(
+        CommandFailureKind::RecoverInPlace,
+        make_error_code(std::errc::operation_canceled));
+}
+
+EtherDreamController::CommandResult
+EtherDreamController::handleInvalidCommandResponse(char command,
+                                                   std::uint64_t sequence,
+                                                   const ResponseFrame& frame) {
+    const auto& response = frame.response;
+    updatePlaybackRequirements(response.status, sequence);
+
+    const bool dataRejectedBecausePlaybackIdle =
+        command == 'd'
+        && response.status.lightEngineState == LightEngineState::Ready
+        && response.status.playbackState == PlaybackState::Idle;
+    const bool dataRejectedBecauseBufferFull =
+        command == 'd'
+        && response.status.lightEngineState == LightEngineState::Ready
+        && isPlaybackStateThatCanHoldBufferedData(response.status.playbackState)
+        && (statusLooksFullForDataReject(response.status, getBufferSize())
+            || dataPacketWouldOverflowBuffer(response.status, sequence));
+
+    if (dataRejectedBecausePlaybackIdle) {
+        if (response.status.hasPlaybackUnderflow()) {
+            logInfo("[EtherDream] data command rejected after playback underflow",
+                    "conn", connectionGeneration,
+                    "seq", sequence,
+                    "sts", response.status.describe(),
+                    "hex", EtherDreamStatus::toHexLine(frame.raw.data(), frame.rawSize),
+                    "tx", describeProtocolTx(sequence));
+            recordIntermittentError(error_types::network::bufferUnderflow);
+        } else {
+            logInfo("[EtherDream] data command rejected because playback is idle after underrun",
+                    "conn", connectionGeneration,
+                    "seq", sequence,
+                    "sts", response.status.describe(),
+                    "hex", EtherDreamStatus::toHexLine(frame.raw.data(), frame.rawSize),
+                    "tx", describeProtocolTx(sequence));
+            recordIntermittentError(error_types::network::bufferUnderflow);
+        }
+        resetStartupBlank();
+        scheduleClearRecovery("invalid_data_idle", response.status, sequence);
+        return CommandResult::failure(
+            CommandFailureKind::RecoverInPlace,
+            make_error_code(std::errc::operation_canceled));
+    }
+
+    if (dataRejectedBecauseBufferFull) {
+        logError("[EtherDream] data command rejected because DAC buffer is full",
+                 "conn", connectionGeneration,
+                 "seq", sequence,
+                 "sts", response.status.describe(),
+                 "hex", EtherDreamStatus::toHexLine(frame.raw.data(), frame.rawSize),
+                 "tx", describeProtocolTx(sequence));
+        recordBufferOverrun();
+        scheduleClearRecovery("invalid_data_buffer_full", response.status, sequence);
+        return CommandResult::failure(
+            CommandFailureKind::RecoverInPlace,
+            make_error_code(std::errc::operation_canceled));
+    }
+
+    logError("[EtherDream] NAK invalid command", command,
+             "conn", connectionGeneration,
+             "seq", sequence,
+             "sts", response.status.describe(),
+             "hex", EtherDreamStatus::toHexLine(frame.raw.data(), frame.rawSize),
+             "tx", describeProtocolTx(sequence));
+    recordIntermittentError(error_types::network::protocolError);
+    if (command == 'd') {
+        scheduleClearRecovery("invalid_data_command", response.status, sequence);
+    }
+    return CommandResult::failure(
+        CommandFailureKind::RecoverInPlace,
+        make_error_code(std::errc::operation_canceled));
+}
+
+EtherDreamController::CommandResult
+EtherDreamController::handleBufferFullResponse(char command,
+                                               std::uint64_t sequence,
+                                               const ResponseFrame& frame) {
+    const auto& response = frame.response;
+    updatePlaybackRequirements(response.status, sequence);
+    logError("[EtherDream] NAK buffer full for command", command,
+             "conn", connectionGeneration,
+             "seq", sequence,
+             "sts", response.status.describe(),
+             "hex", EtherDreamStatus::toHexLine(frame.raw.data(), frame.rawSize),
+             "tx", describeProtocolTx(sequence));
+    recordBufferOverrun();
+    if (command == 'd') {
+        scheduleClearRecovery("data_buffer_full", response.status, sequence);
+    }
+    return CommandResult::failure(
+        CommandFailureKind::RecoverInPlace,
+        make_error_code(std::errc::operation_canceled));
+}
+
+EtherDreamController::CommandResult
+EtherDreamController::handleUnexpectedResponse(char command,
+                                               std::uint64_t sequence,
+                                               const ResponseFrame& frame) {
+    const auto& response = frame.response;
+    logError("[EtherDream] unexpected ACK expected", command,
+             "conn", connectionGeneration,
+             "seq", sequence,
+             "got response", static_cast<char>(response.response),
+             "for command", static_cast<char>(response.command),
+             "hex", EtherDreamStatus::toHexLine(frame.raw.data(), frame.rawSize),
+             "tx", describeProtocolTx(sequence));
+    recordIntermittentError(error_types::network::protocolError);
+    return CommandResult::failure(
+        CommandFailureKind::ProtocolFailure,
+        make_error_code(std::errc::protocol_error));
 }
 
 
@@ -538,22 +605,24 @@ void EtherDreamController::syncPointRate() {
             "from", lastSentPointRate,
             "to", desired,
             "sts", lastKnownStatus.describe());
-    stopRequired = true;
-    clearRequired = false;
-    prepareRequired = false;
-    beginRequired = false;
+    playbackAction = PlaybackAction::Stop;
     pendingRateChangeCount = 0;
     resetPoints();
 }
 
-expected<Ack> EtherDreamController::sendCommand(bool allowWhileStopping) {
+EtherDreamController::CommandResult
+EtherDreamController::sendCommand(bool allowWhileStopping) {
 
     if (!running && !allowWhileStopping) {
-        return unexpected(std::make_error_code(std::errc::operation_canceled));
+        return CommandResult::failure(
+            CommandFailureKind::Shutdown,
+            std::make_error_code(std::errc::operation_canceled));
     }
 
     if (!commandBuffer.isReady()) {
-        return unexpected(make_error_code(std::errc::invalid_argument));
+        return CommandResult::failure(
+            CommandFailureKind::ProtocolFailure,
+            make_error_code(std::errc::invalid_argument));
     }
 
     const char opcode = commandBuffer.commandOpcode();
@@ -572,7 +641,7 @@ expected<Ack> EtherDreamController::sendCommand(bool allowWhileStopping) {
                  "tx", describeProtocolTx(sequence));
         commandBuffer.reset();
         recordConnectionError(error_types::network::sendFailed);
-        return unexpected(ec);
+        return CommandResult::failure(CommandFailureKind::NetworkFailure, ec);
     }
 
     // Once bytes are on the wire we must drain the matching response even if
@@ -586,7 +655,8 @@ expected<Ack> EtherDreamController::sendCommand(bool allowWhileStopping) {
     return ack;
 }
 
-expected<Ack> EtherDreamController::sendPointRate(std::uint32_t rate) {
+EtherDreamController::CommandResult
+EtherDreamController::sendPointRate(std::uint32_t rate) {
 
     commandBuffer.setPointRateCommand(rate);
 
@@ -771,12 +841,13 @@ std::string EtherDreamController::describeProtocolTx(std::uint64_t sequence) con
     return os.str();
 }
 
-std::size_t EtherDreamController::calculateMinimumPoints() {
+std::size_t EtherDreamController::targetBufferDeficitPoints() {
     const int bufferFullness = estimateBufferFullness();
-    const int minPoints = targetBufferPoints();
-    if(bufferFullness>=minPoints) return 0;
-    else return static_cast<std::size_t>(minPoints - bufferFullness);
-
+    const int targetPoints = targetBufferPoints();
+    if (bufferFullness >= targetPoints) {
+        return 0;
+    }
+    return static_cast<std::size_t>(targetPoints - bufferFullness);
 }
 
 
@@ -793,14 +864,27 @@ void EtherDreamController::handleNetworkFailure(std::string_view where,
     tcpClient.close();
 }
 
+bool EtherDreamController::shouldCloseConnectionAfterCommandFailure(
+    const CommandResult& result) {
+    return !result
+        && result.failureKind != CommandFailureKind::Shutdown
+        && result.failureKind != CommandFailureKind::RecoverInPlace;
+}
+
+EtherDreamController::CommandFailureKind
+EtherDreamController::commandFailureKindForResponseReadError(
+    const std::error_code& ec) {
+    if (ec == std::errc::protocol_error) {
+        return CommandFailureKind::ProtocolFailure;
+    }
+    return CommandFailureKind::NetworkFailure;
+}
+
 
 void EtherDreamController::scheduleClearRecovery(const char* recoveryReason,
                                                  const EtherDreamStatus& status,
                                                  std::uint64_t sequence) {
-    stopRequired = false;
-    clearRequired = true;
-    prepareRequired = false;
-    beginRequired = false;
+    playbackAction = PlaybackAction::Clear;
     resetPoints();
 
     if (sequence != 0) {
@@ -821,6 +905,51 @@ void EtherDreamController::scheduleClearRecovery(const char* recoveryReason,
             "sts", status.describe());
 }
 
+EtherDreamController::PlaybackAction
+EtherDreamController::actionForStatus(const EtherDreamStatus& status) const {
+    if (!isKnownLightEngineState(status.lightEngineState)) {
+        return PlaybackAction::None;
+    }
+
+    if (status.lightEngineState == LightEngineState::Estop) {
+        return PlaybackAction::Clear;
+    }
+
+    if (status.lightEngineState != LightEngineState::Ready) {
+        return PlaybackAction::None;
+    }
+
+    if (!isKnownPlaybackState(status.playbackState)
+        || status.playbackState == PlaybackState::Paused) {
+        return PlaybackAction::Stop;
+    }
+
+    // Command validity is governed by the reported playback state. Flags such
+    // as underflow are useful diagnostics, but may be sticky; do not send
+    // prepare while the DAC still says it is prepared/playing.
+    if (status.playbackState == PlaybackState::Idle) {
+        return PlaybackAction::Prepare;
+    }
+
+    const int beginThreshold = beginBufferThresholdPoints();
+    const int bufferFullness = static_cast<int>(status.bufferFullness);
+    if (status.playbackState == PlaybackState::Prepared
+        && beginThreshold > 0
+        && bufferFullness >= beginThreshold) {
+        return PlaybackAction::Begin;
+    }
+
+    return PlaybackAction::None;
+}
+
+bool EtherDreamController::statusAllowsPointRateRecovery(
+    const EtherDreamStatus& status) const {
+    return isKnownLightEngineState(status.lightEngineState)
+        && status.lightEngineState == LightEngineState::Ready
+        && isKnownPlaybackState(status.playbackState)
+        && status.playbackState != PlaybackState::Paused;
+}
+
 
 void EtherDreamController::updatePlaybackRequirements(const EtherDreamStatus& status,
                                                       std::uint64_t sequence) {
@@ -831,40 +960,16 @@ void EtherDreamController::updatePlaybackRequirements(const EtherDreamStatus& st
     lastKnownBufferCapacity.store(getBufferSize(), std::memory_order_relaxed);
     
 
-    const bool lightEngineEstop = status.lightEngineState == LightEngineState::Estop;
     const bool underflow = status.hasPlaybackUnderflow();
     if (underflow && !wasUnderflow) {
         recordIntermittentError(error_types::network::bufferUnderflow);
         resetStartupBlank();
     }
 
-    const bool knownLightEngineState = isKnownLightEngineState(status.lightEngineState);
-    const bool knownPlaybackState = isKnownPlaybackState(status.playbackState);
+    playbackAction = actionForStatus(status);
 
-    stopRequired = false;
-    clearRequired = false;
-    prepareRequired = false;
-    beginRequired = false;
-
-    if (!knownLightEngineState) {
-        return;
-    }
-
-    if (lightEngineEstop) {
-        clearRequired = true;
-        return;
-    }
-
-    if (status.lightEngineState != LightEngineState::Ready) {
-        return;
-    }
-
-    if (!knownPlaybackState || status.playbackState == PlaybackState::Paused) {
-        stopRequired = true;
-        return;
-    }
-
-    if (statusPointRateIsImplausible(status)) {
+    if (statusAllowsPointRateRecovery(status)
+        && statusPointRateIsImplausible(status)) {
         if (!implausiblePointRateRecoveryPending && !rebootRequiredLatched) {
             implausiblePointRateRecoveryPending = true;
             logError("[EtherDream] implausible active point rate; attempting clear recovery",
@@ -885,24 +990,17 @@ void EtherDreamController::updatePlaybackRequirements(const EtherDreamStatus& st
                      "tx", describeProtocolTx(sequence));
             recordIntermittentError(error_types::etherdream::rebootRequired);
         }
-        stopRequired = true;
+        playbackAction = PlaybackAction::Stop;
         resetPoints();
+        return;
+    }
+
+    if (!statusAllowsPointRateRecovery(status)) {
         return;
     }
 
     implausiblePointRateRecoveryPending = false;
     rebootRequiredLatched = false;
-
-    // Command validity is governed by the reported playback state. Flags such
-    // as underflow are useful diagnostics, but may be sticky; do not send
-    // prepare while the DAC still says it is prepared/playing.
-    prepareRequired = status.playbackState == PlaybackState::Idle;
-
-    const int beginThreshold = beginBufferThresholdPoints();
-    const int bufferFullness = static_cast<int>(status.bufferFullness);
-    beginRequired = status.playbackState == PlaybackState::Prepared
-        && beginThreshold > 0
-        && bufferFullness >= beginThreshold;
 }
 
 void EtherDreamController::applyFreshConnectionStatus(const EtherDreamStatus& status) {
@@ -915,26 +1013,17 @@ void EtherDreamController::applyFreshConnectionStatus(const EtherDreamStatus& st
     }
 
     if (status.lightEngineState == LightEngineState::Estop) {
-        stopRequired = false;
-        clearRequired = true;
-        prepareRequired = false;
-        beginRequired = false;
+        playbackAction = PlaybackAction::Clear;
         return;
     }
 
     if (status.lightEngineState != LightEngineState::Ready) {
-        stopRequired = false;
-        clearRequired = false;
-        prepareRequired = false;
-        beginRequired = false;
+        playbackAction = PlaybackAction::None;
         return;
     }
 
     if (status.playbackState == PlaybackState::Idle) {
-        stopRequired = false;
-        clearRequired = false;
-        prepareRequired = true;
-        beginRequired = false;
+        playbackAction = PlaybackAction::Prepare;
         return;
     }
 
@@ -943,10 +1032,7 @@ void EtherDreamController::applyFreshConnectionStatus(const EtherDreamStatus& st
     // so stop it before preparing our own stream.
     logInfoVerbose("[EtherDream] fresh connection reported non-idle playback; resetting",
                    "sts", status.describe());
-    stopRequired = true;
-    clearRequired = false;
-    prepareRequired = false;
-    beginRequired = false;
+    playbackAction = PlaybackAction::Stop;
     resetPoints();
 }
 
@@ -959,7 +1045,7 @@ core::PointFillRequest EtherDreamController::getFillRequest() {
     const auto freeSpace = usableBufferFreeSpace(bufferFullness);
     const auto packetSpace = std::min<std::size_t>(freeSpace, maxDataCommandPoints());
     const auto targetDeficit =
-        std::min<std::size_t>(calculateMinimumPoints(), packetSpace);
+        std::min<std::size_t>(targetBufferDeficitPoints(), packetSpace);
     
     core::PointFillRequest req;
     // The latency target is the amount we require, not a hard cap on the
@@ -1002,12 +1088,12 @@ bool EtherDreamController::shouldRequestPoints(const core::PointFillRequest& req
         return request.maximumPointsRequired > 0;
     }
 
-    return request.minimumPointsRequired > config::ETHERDREAM_MIN_PACKET_POINTS
-        || request.maximumPointsRequired > config::ETHERDREAM_MIN_PACKET_POINTS;
+    const auto refillThreshold = config::ETHERDREAM_NORMAL_REFILL_MIN_DEFICIT_POINTS;
+    return request.minimumPointsRequired >= refillThreshold;
 }
 
 bool EtherDreamController::canSendData() const {
-    if (stopRequired || clearRequired || prepareRequired || beginRequired) {
+    if (playbackAction != PlaybackAction::None) {
         return false;
     }
 
@@ -1021,11 +1107,11 @@ bool EtherDreamController::canSendData() const {
 
 void EtherDreamController::sendPoints() {
     if (!canSendData()) {
-        if (!clearRequired
-            && !stopRequired
+        if (playbackAction != PlaybackAction::Clear
+            && playbackAction != PlaybackAction::Stop
             && lastKnownStatus.lightEngineState == LightEngineState::Ready
             && lastKnownStatus.playbackState == PlaybackState::Idle) {
-            prepareRequired = true;
+            playbackAction = PlaybackAction::Prepare;
         }
         resetPoints();
         return;
@@ -1060,7 +1146,7 @@ void EtherDreamController::sendPoints() {
     auto dataAck = sendCommand();
     const auto sendDuration = std::chrono::steady_clock::now() - sendStart;
     if (!dataAck) {
-        if (dataAck.error() != std::errc::operation_canceled) {
+        if (shouldCloseConnectionAfterCommandFailure(dataAck)) {
             handleNetworkFailure("data command", dataAck.error());
         }
         resetPoints();
@@ -1087,13 +1173,10 @@ void EtherDreamController::sendStop(bool allowWhileStopping) {
             && ack->status.playbackState != PlaybackState::Idle) {
             logError("[EtherDream] stop ACK did not report idle playback",
                      "sts", ack->status.describe());
-            stopRequired = true;
-            clearRequired = false;
-            prepareRequired = false;
-            beginRequired = false;
+            playbackAction = PlaybackAction::Stop;
         }
     } else {
-        if (ack.error() != std::errc::operation_canceled) {
+        if (shouldCloseConnectionAfterCommandFailure(ack)) {
             handleNetworkFailure("stop command", ack.error());
         }
     }
@@ -1103,7 +1186,7 @@ void EtherDreamController::sendClear() {
     logInfoVerbose("[EtherDream] clear required -> send 'c'");
     commandBuffer.setSingleByteCommand('c');
     if (auto ack = sendCommand(); !ack) {
-        if (ack.error() != std::errc::operation_canceled) {
+        if (shouldCloseConnectionAfterCommandFailure(ack)) {
             handleNetworkFailure("clear command", ack.error());
         }
     }
@@ -1118,13 +1201,10 @@ void EtherDreamController::sendPrepare() {
             && ack->status.playbackState != PlaybackState::Prepared) {
             logError("[EtherDream] prepare ACK did not report idle/prepared playback",
                      "sts", ack->status.describe());
-            stopRequired = true;
-            clearRequired = false;
-            prepareRequired = false;
-            beginRequired = false;
+            playbackAction = PlaybackAction::Stop;
         }
     } else {
-        if (ack.error() != std::errc::operation_canceled) {
+        if (shouldCloseConnectionAfterCommandFailure(ack)) {
             handleNetworkFailure("prepare command", ack.error());
         }
     }
@@ -1145,13 +1225,13 @@ void EtherDreamController::sendBegin() {
                      tcpClient.getDefaultTimeout().count(), "ms");
             recordIntermittentError(error_types::network::timeout);
         }
-        if (ack.error() != std::errc::operation_canceled) {
+        if (shouldCloseConnectionAfterCommandFailure(ack)) {
             handleNetworkFailure("begin command", ack.error());
         }
     }
 }
 
-expected<Ack> EtherDreamController::sendPing() {
+EtherDreamController::CommandResult EtherDreamController::sendPing() {
     commandBuffer.setSingleByteCommand('?');
     return sendCommand();
 }
@@ -1162,7 +1242,7 @@ void EtherDreamController::pollStatus() {
         recordIntermittentError(error_types::network::bufferUnderflow);
         resetStartupBlank();
     }
-    if (!ack && ack.error() != std::errc::operation_canceled) {
+    if (shouldCloseConnectionAfterCommandFailure(ack)) {
         handleNetworkFailure("status ping", ack.error());
     }
 }
@@ -1662,10 +1742,7 @@ void EtherDreamController::resetPoints() {
 }
 
 void EtherDreamController::resetProtocolStateForConnection() {
-    clearRequired = false;
-    stopRequired = false;
-    prepareRequired = true;
-    beginRequired = false;
+    playbackAction = PlaybackAction::Prepare;
     connectionActive = false;
     lastKnownStatus = EtherDreamStatus{};
     lastReceiveTime = {};

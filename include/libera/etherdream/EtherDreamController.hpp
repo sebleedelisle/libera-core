@@ -80,6 +80,51 @@ private:
     friend class EtherDreamControllerTestAccess;
 #endif
 
+    enum class PlaybackAction {
+        None,
+        Stop,
+        Clear,
+        Prepare,
+        Begin
+    };
+
+    enum class CommandFailureKind {
+        Shutdown,
+        RecoverInPlace,
+        NetworkFailure,
+        ProtocolFailure
+    };
+
+    struct CommandResult {
+        std::optional<Ack> ack{};
+        CommandFailureKind failureKind = CommandFailureKind::NetworkFailure;
+        std::error_code errorCode{};
+
+        static CommandResult success(Ack value) {
+            CommandResult result;
+            result.ack = value;
+            return result;
+        }
+
+        static CommandResult failure(CommandFailureKind kind, std::error_code ec) {
+            CommandResult result;
+            result.failureKind = kind;
+            result.errorCode = ec;
+            return result;
+        }
+
+        explicit operator bool() const { return ack.has_value(); }
+        const Ack& operator*() const { return *ack; }
+        const Ack* operator->() const { return &(*ack); }
+        std::error_code error() const { return errorCode; }
+    };
+
+    struct ResponseFrame {
+        EtherDreamResponse response{};
+        std::array<std::uint8_t, 22> raw{};
+        std::size_t rawSize = 0;
+    };
+
     /// If the desired point rate changes while playback is running, restart the
     /// stream so the new rate is carried by a fresh begin command. Initial and
     /// reconnect rate selection is also carried by begin.
@@ -87,26 +132,47 @@ private:
 
 
     /// Wait for the response frame to a specific command.
-    expected<Ack>
+    CommandResult
     waitForResponse(char command,
                     bool allowWhileStopping = false,
                     std::uint64_t sequence = 0);
 
     /// Send the prepared command stored in commandBuffer and wait for its ACK.
-    expected<Ack> sendCommand(bool allowWhileStopping = false);
+    CommandResult sendCommand(bool allowWhileStopping = false);
 
     /// Issue the point-rate command ('q') and return the associated ACK.
-    expected<Ack>
+    CommandResult
     sendPointRate(std::uint32_t rate);
 
-    std::size_t calculateMinimumPoints();
+    std::size_t targetBufferDeficitPoints();
     void sleepUntilNextPoints();
 
     void handleNetworkFailure(std::string_view where,
                               const std::error_code& ec);
+    static bool shouldCloseConnectionAfterCommandFailure(
+        const CommandResult& result);
+    static CommandFailureKind commandFailureKindForResponseReadError(
+        const std::error_code& ec);
 
     void resetPoints();
     void resetProtocolStateForConnection();
+    expected<ResponseFrame> readResponseFrame(char command,
+                                              std::uint64_t sequence);
+    CommandResult handleResponseFrame(char command,
+                                      std::uint64_t sequence,
+                                      const ResponseFrame& frame);
+    CommandResult handleStopConditionResponse(char command,
+                                              std::uint64_t sequence,
+                                              const ResponseFrame& frame);
+    CommandResult handleInvalidCommandResponse(char command,
+                                               std::uint64_t sequence,
+                                               const ResponseFrame& frame);
+    CommandResult handleBufferFullResponse(char command,
+                                           std::uint64_t sequence,
+                                           const ResponseFrame& frame);
+    CommandResult handleUnexpectedResponse(char command,
+                                           std::uint64_t sequence,
+                                           const ResponseFrame& frame);
     void recordProtocolTx(std::uint64_t sequence, char opcode);
     void logProtocolRx(std::uint64_t sequence,
                        char expectedCommand,
@@ -128,6 +194,8 @@ private:
     std::size_t playingUnderrunBufferThreshold() const;
     bool bufferIsBelowPlayingUnderrunThreshold(int bufferFullness) const;
     bool statusReportsPlayingBufferUnderrun(const EtherDreamStatus& status) const;
+    PlaybackAction actionForStatus(const EtherDreamStatus& status) const;
+    bool statusAllowsPointRateRecovery(const EtherDreamStatus& status) const;
 
     void scheduleClearRecovery(const char* recoveryReason,
                                const EtherDreamStatus& status,
@@ -143,7 +211,7 @@ private:
     void sendClear();
     void sendPrepare();
     void sendBegin();
-    expected<Ack> sendPing();
+    CommandResult sendPing();
     void pollStatus();
     void sendOrderlyStopBeforeClose();
     void captureStreamHealthRequest(const core::PointFillRequest& request,
@@ -241,10 +309,7 @@ private:
     libera::net::TcpClient tcpClient;
     std::optional<EtherDreamControllerInfo> controllerInfo;
 
-    bool clearRequired = false;
-    bool stopRequired = false;
-    bool prepareRequired = false;
-    bool beginRequired = false;
+    PlaybackAction playbackAction = PlaybackAction::None;
     bool connectionActive = false;
     bool clearOnFreshConnection = false;
     bool implausiblePointRateRecoveryPending = false;
