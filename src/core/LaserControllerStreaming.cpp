@@ -286,6 +286,7 @@ void LaserControllerStreaming::postProcessOutputPoints(std::vector<LaserPoint>& 
     const auto shiftPointCount =
         static_cast<std::size_t>(millisToPoints(syncTenThousandths * 0.1));
 
+    std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
     scannerSyncColourDelayLine.resize(shiftPointCount); 
 
     if(shiftPointCount>0) { 
@@ -806,6 +807,7 @@ ControllerEventSeverity LaserControllerStreaming::recentEventSeverityNow(
 void LaserControllerStreaming::resetStartupBlank() {
     const int blankPoints = millisToPoints(1.0f);
     startupBlankPointsRemaining.store(blankPoints, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
     scannerSyncColourDelayLine.clear();
 }
 
@@ -818,6 +820,7 @@ void LaserControllerStreaming::resetShutdownBlank() {
     const int syncPoints = static_cast<int>(millisToPoints(syncTenThousandths * 0.1));
     const int dwellPoints = millisToPoints(1.0);
     shutdownBlankPointsRemaining.store(syncPoints + dwellPoints, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
     scannerSyncColourDelayLine.clear();
 }
 
