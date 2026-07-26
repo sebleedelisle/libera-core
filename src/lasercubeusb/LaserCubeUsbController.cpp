@@ -1,3 +1,10 @@
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define _WINSOCKAPI_
+#endif
+
 #include "libera/lasercubeusb/LaserCubeUsbController.hpp"
 
 #include "libera/core/BufferEstimator.hpp"
@@ -5,6 +12,7 @@
 #include "libera/core/ControllerErrorTypes.hpp"
 #include "libera/lasercubeusb/LaserCubeUsbConfig.hpp"
 #include "libera/log/Log.hpp"
+#include "libera/usb/LibusbSafe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,12 +21,6 @@
 #include <stdexcept>
 #include <thread>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX // Keep Windows headers from defining min/max macros that break std::min/std::max.
-#endif
-#define _WINSOCKAPI_
-#endif
 #include "libusb.h"
 
 namespace libera::lasercubeusb {
@@ -124,7 +126,8 @@ openLaserCubeUsbHandle(libusb_context* context, const std::string& serial) {
     }
 
     libusb_device** deviceList = nullptr;
-    const ssize_t count = libusb_get_device_list(context, &deviceList);
+    const ssize_t count =
+        libera::usb::getDeviceList(context, &deviceList, "LaserCubeUsbController::openUsbHandle");
     if (count < 0 || !deviceList) {
         return libera::unexpected(std::make_error_code(std::errc::io_error));
     }

@@ -2,6 +2,7 @@
 
 #include "libera/lasercubeusb/LaserCubeUsbConfig.hpp"
 #include "libera/log/Log.hpp"
+#include "libera/usb/LibusbSafe.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -158,7 +159,8 @@ std::vector<std::unique_ptr<core::ControllerInfo>> LaserCubeUsbManager::discover
     }
 
     libusb_device** deviceList = nullptr;
-    const ssize_t count = libusb_get_device_list(usbContext.get(), &deviceList);
+    const ssize_t count =
+        libera::usb::getDeviceList(usbContext.get(), &deviceList, "LaserCubeUsbManager::discover");
     if (count < 0 || !deviceList) {
         logError("[LaserCubeUsbManager] libusb_get_device_list failed", libusb_error_name(static_cast<int>(count)));
         return results;

@@ -3,6 +3,7 @@
 #include "libera/core/ControllerErrorTypes.hpp"
 #include "libera/helios/HeliosTransportSupport.hpp"
 #include "libera/log/Log.hpp"
+#include "libera/usb/LibusbSafe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -164,7 +165,8 @@ HeliosUsbOpenResult openHeliosUsbConnectionLocked(libusb_context* usbContext,
     // only the one matching the persisted port path. Caller must hold the shared
     // Helios USB lifecycle lock for this whole list/open/startup/free sequence.
     libusb_device** deviceList = nullptr;
-    const ssize_t count = libusb_get_device_list(usbContext, &deviceList);
+    const ssize_t count =
+        libera::usb::getDeviceList(usbContext, &deviceList, "HeliosController::openUsbConnection");
     if (count < 0 || !deviceList) {
         return result;
     }
