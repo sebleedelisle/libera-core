@@ -119,8 +119,8 @@ target_sources(libera-core PRIVATE $<TARGET_OBJECTS:helios-sdk>)
 
 target_link_libraries(libera-core PUBLIC libusb::libusb)
 
-# Plugin system needs dlopen/dlsym on POSIX.
-if (LIBERA_ENABLE_PLUGINS AND NOT WIN32)
+# Plugin runtime loading uses dlopen/dlsym on POSIX.
+if (NOT WIN32)
     target_link_libraries(libera-core PRIVATE ${CMAKE_DL_LIBS})
 endif()
 

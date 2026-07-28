@@ -279,7 +279,13 @@ void LaserControllerStreaming::postProcessOutputPoints(std::vector<LaserPoint>& 
         }
     } 
 
-    // applies scanner sync
+    if (!scannerSyncEnabled.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
+        scannerSyncColourDelayLine.clear();
+        return;
+    }
+
+    // Applies scanner sync.
     const double syncTenThousandths =
         std::max(scannerSyncTime.load(std::memory_order_relaxed), 0.0);
     
@@ -816,7 +822,9 @@ void LaserControllerStreaming::resetShutdownBlank() {
     // sync colour delay line plus 1 ms dwell, so no stale colours leak through
     // as galvos travel back to centre.
     const double syncTenThousandths =
-        std::max(scannerSyncTime.load(std::memory_order_relaxed), 0.0);
+        scannerSyncEnabled.load(std::memory_order_relaxed)
+            ? std::max(scannerSyncTime.load(std::memory_order_relaxed), 0.0)
+            : 0.0;
     const int syncPoints = static_cast<int>(millisToPoints(syncTenThousandths * 0.1));
     const int dwellPoints = millisToPoints(1.0);
     shutdownBlankPointsRemaining.store(syncPoints + dwellPoints, std::memory_order_relaxed);
@@ -839,6 +847,18 @@ void LaserControllerStreaming::setScannerSync(double offsetTenThousandths) {
 
 double LaserControllerStreaming::getScannerSync() const noexcept {
     return scannerSyncTime.load(std::memory_order_relaxed);
+}
+
+void LaserControllerStreaming::setScannerSyncEnabled(bool enabled) {
+    const bool wasEnabled = scannerSyncEnabled.exchange(enabled, std::memory_order_relaxed);
+    if (wasEnabled != enabled) {
+        std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
+        scannerSyncColourDelayLine.clear();
+    }
+}
+
+bool LaserControllerStreaming::isScannerSyncEnabled() const noexcept {
+    return scannerSyncEnabled.load(std::memory_order_relaxed);
 }
 
 } // namespace libera::core

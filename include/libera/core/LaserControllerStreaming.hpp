@@ -209,6 +209,8 @@ public:
     // Offset expressed in 1/10,000th of a second (0.1 ms) units.
     void setScannerSync(double offsetTenThousandths); 
     double getScannerSync() const noexcept; 
+    void setScannerSyncEnabled(bool enabled);
+    bool isScannerSyncEnabled() const noexcept;
     void setVerbose(bool enabled);
     bool isVerbose() const noexcept;
 
@@ -353,6 +355,7 @@ protected:
     PointRequestMetrics pointRequestMetrics{};
     // Stores 1/10,000th of a second units so we match legacy colour-shift semantics.
     std::atomic<double> scannerSyncTime{2.0}; // in 1/10,000 of a second
+    std::atomic<bool> scannerSyncEnabled{true};
     // Arm/disarm can reset this delay line from the app thread while transport
     // workers are applying scanner sync, so every deque mutation is serialized.
     mutable std::mutex scannerSyncColourDelayLineMutex;
