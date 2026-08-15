@@ -60,15 +60,16 @@ If you like, you can instead include just the controllers you want to support:
 
 Only the built-in controller types you include will be discovered.
 
-Plugins are loaded separately from a few default search locations, so in the
-normal case you can just construct `System` and drop plugin libraries into a
-`plugins/` folder next to your app:
+Plugins are loaded separately from Libera's shared user plugin folder. In the
+normal case you can just construct `System` and install plugin libraries once
+for all Libera apps:
 
 ```cpp
 libera::System liberaSystem;
 ```
 
-Only configure plugin search paths if you want to override those defaults:
+Only configure plugin search paths if you deliberately want a custom plugin set,
+for example in a test, development tool, or portable host app:
 
 ```cpp
 libera::System::setPluginDirectory("plugins");
@@ -76,6 +77,11 @@ libera::System::addPluginDirectory("/absolute/path/to/more/plugins");
 
 libera::System liberaSystem;
 ```
+
+Apps that expose plugin management UI should use
+`libera::plugin::listManagedPlugins()`, `installPlugin()`, and
+`removePlugin()` from `PluginManagement.hpp` rather than duplicating filesystem
+and validation rules.
 
 ## Step 1 - discover controllers
 

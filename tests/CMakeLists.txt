@@ -7,6 +7,7 @@ set(LIBERA_UNIT_TESTS
   ${CMAKE_CURRENT_SOURCE_DIR}/test_core_frame_scheduler.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_core_frame_advance.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_core_projected_render_time.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/test_core_plugin_directory.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_core_queue_budget_floor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_core_single_controller_manager_base.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test_avb_backend_state.cpp
@@ -41,6 +42,11 @@ set(LIBERA_HARDWARE_TESTS
   ${CMAKE_CURRENT_SOURCE_DIR}/test_lightspacenet_stream.cpp
 )
 
+if (LIBERA_ENABLE_PLUGINS)
+  list(APPEND LIBERA_UNIT_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_plugin_management.cpp)
+endif()
+
 foreach(test_source IN LISTS LIBERA_UNIT_TESTS)
   get_filename_component(test_name ${test_source} NAME_WE)
   add_executable(${test_name} ${test_source})
@@ -57,6 +63,35 @@ foreach(test_source IN LISTS LIBERA_UNIT_TESTS)
     )
   endif()
 endforeach()
+
+if (LIBERA_ENABLE_PLUGINS)
+  add_library(test_valid_libera_plugin SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugin_fixtures/valid_plugin.cpp)
+  add_library(test_missing_transport_libera_plugin SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/plugin_fixtures/missing_transport_plugin.cpp)
+
+  foreach(plugin_fixture IN ITEMS test_valid_libera_plugin test_missing_transport_libera_plugin)
+    target_include_directories(${plugin_fixture} PRIVATE
+      ${CMAKE_SOURCE_DIR}/include)
+    libera_apply_warnings(${plugin_fixture})
+    libera_apply_sanitizers(${plugin_fixture})
+    set_target_properties(${plugin_fixture} PROPERTIES
+      PREFIX ""
+      WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  endforeach()
+
+  set_target_properties(test_valid_libera_plugin PROPERTIES
+    OUTPUT_NAME "test-valid-libera-plugin")
+  set_target_properties(test_missing_transport_libera_plugin PROPERTIES
+    OUTPUT_NAME "test-missing-transport-libera-plugin")
+
+  add_dependencies(test_plugin_management
+    test_valid_libera_plugin
+    test_missing_transport_libera_plugin)
+  target_compile_definitions(test_plugin_management PRIVATE
+    TEST_VALID_PLUGIN_PATH="$<TARGET_FILE:test_valid_libera_plugin>"
+    TEST_MISSING_TRANSPORT_PLUGIN_PATH="$<TARGET_FILE:test_missing_transport_libera_plugin>")
+endif()
 
 if (LIBERA_BUILD_INTEGRATION_TESTS)
   foreach(test_source IN LISTS LIBERA_INTEGRATION_TESTS)

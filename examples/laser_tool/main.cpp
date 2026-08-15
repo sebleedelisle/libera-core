@@ -26,6 +26,7 @@
 // libera-core: the main laser controller library. Provides System (discovery),
 // LaserController (connection/output), Frame, and LaserPoint types.
 #include "libera.h"
+#include "libera/gui/imgui/PluginManagementPanel.hpp"
 
 // Dear ImGui: immediate-mode UI library. We use the GLFW + OpenGL3 backends.
 #include "imgui.h"
@@ -188,6 +189,10 @@ struct AppState {
     std::vector<DiscoveredInfo> latestDiscovered;
     std::atomic<bool> discoveryResultReady{false};
     std::atomic<bool> discoveryRequested{false}; // Set true to trigger an immediate rescan
+
+    // -- Optional plugin management example --
+    bool showPluginsWindow = false;
+    libera::gui::imgui::PluginPanelState pluginPanelState;
 
     // -- Point rate presets --
     struct PointRatePreset {
@@ -1336,6 +1341,10 @@ int main(int /*argc*/, char* argv[]) {
         ImGui::Text("Discovered Controllers");
         ImGui::SameLine();
         if (ImGui::SmallButton("Rescan")) state.discoveryRequested.store(true);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Plugins")) {
+            state.showPluginsWindow = true;
+        }
         ImGui::Separator();
 
         if (state.controllers.empty()) {
@@ -1420,6 +1429,21 @@ int main(int /*argc*/, char* argv[]) {
 
         ImGui::EndChild();
         ImGui::End();
+
+        if (state.showPluginsWindow) {
+            ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Plugins", &state.showPluginsWindow)) {
+                libera::gui::imgui::PluginPanelCallbacks callbacks;
+                libera::gui::imgui::PluginPanelOptions options;
+                options.allowInstall = false;
+                options.showRestartButton = false;
+                libera::gui::imgui::DrawPluginManagementPanel(
+                    state.pluginPanelState,
+                    callbacks,
+                    options);
+            }
+            ImGui::End();
+        }
 
         // --- Render ---
         ImGui::Render();

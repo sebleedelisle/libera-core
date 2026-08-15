@@ -26,6 +26,9 @@ option(LIBERA_BUILD_HARDWARE_TESTS "Build hardware tests (requires controller ha
 option(LIBERA_BUILD_EXAMPLES "Build example applications" OFF)
 option(LIBERA_BUILD_LASER_TOOL "Build the GUI laser-tool example" ON)
 option(LIBERA_ENABLE_PLUGINS "Enable runtime plugin loading (disable to exclude all plugin code)" ON)
+option(LIBERA_BUILD_IMGUI_WIDGETS "Build optional reusable ImGui widgets" OFF)
+set(LIBERA_IMGUI_TARGET "imgui_lib" CACHE STRING
+    "ImGui target linked by optional Libera ImGui widgets")
 
 # Optional: a few sensible warnings. Comment out if you prefer quiet builds.
 function(libera_apply_warnings target)
@@ -57,6 +60,9 @@ libera_configure_libusb()
 file(GLOB_RECURSE LIBERA_CORE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
+
+# Optional GUI widgets depend on ImGui and are built as a separate target.
+list(FILTER LIBERA_CORE_SOURCES EXCLUDE REGEX ".*/src/gui/.*")
 
 # Exclude plugin sources when plugin support is disabled.
 if (NOT LIBERA_ENABLE_PLUGINS)
@@ -122,6 +128,15 @@ target_link_libraries(libera-core PUBLIC libusb::libusb)
 # Plugin runtime loading uses dlopen/dlsym on POSIX.
 if (NOT WIN32)
     target_link_libraries(libera-core PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/LiberaImguiWidgets.cmake)
+if (LIBERA_BUILD_IMGUI_WIDGETS)
+    if (NOT LIBERA_ENABLE_PLUGINS)
+        message(FATAL_ERROR
+            "LIBERA_BUILD_IMGUI_WIDGETS requires LIBERA_ENABLE_PLUGINS")
+    endif()
+    libera_add_imgui_plugin_ui(libera-plugin-ui-imgui "${LIBERA_IMGUI_TARGET}")
 endif()
 
 # Windows needs Winsock2 for TCP and UDP symbols. Linux and macOS do not.

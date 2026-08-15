@@ -114,9 +114,8 @@ public:
 
     /// Replace the default plugin search paths with one directory.
     /// Call before constructing System. If never called, Libera searches the
-    /// directories from LIBERA_PLUGIN_DIR when that environment variable is
-    /// set, otherwise it falls back to built-in defaults such as
-    /// "plugins" and "../plugins" relative to the executable.
+    /// shared user plugin directory for the current platform, such as
+    /// "Libera/Plugins" under the user's application-support/data folder.
     /// Pass an empty string to disable plugin loading entirely.
     /// Replaces any previously configured directories.
     static void setPluginDirectory(const std::string& path);

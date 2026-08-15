@@ -7,7 +7,6 @@
 #include "libera/plugin/PluginManager.hpp"
 #include <cstdlib>
 #include <filesystem>
-#include <string_view>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -99,6 +98,11 @@ namespace libera {
 
 namespace {
 
+std::string envValue(const char* name) {
+    const char* value = std::getenv(name);
+    return value ? std::string(value) : std::string{};
+}
+
 std::filesystem::path executableDirectory() {
     namespace fs = std::filesystem;
 #ifdef __APPLE__
@@ -139,52 +143,57 @@ std::string resolvePluginDirectory(const std::string& requested) {
         return exeRelative.string();
     }
 
-    // Fall back to the original (cwd-relative) path so users can still
-    // override by launching from a directory that contains `plugins/`.
+    // Fall back to the original path so explicit development/test overrides
+    // can still be relative to the current working directory.
     return requested;
 }
 
-std::vector<std::string> splitPluginSearchPath(std::string_view rawPaths) {
-    std::vector<std::string> dirs;
-    if (rawPaths.empty()) {
-        return dirs;
-    }
+std::filesystem::path defaultUserPluginDirectory() {
+    namespace fs = std::filesystem;
+    fs::path baseDir;
 
 #ifdef _WIN32
-    constexpr char pathSeparator = ';';
+    const auto localAppData = envValue("LOCALAPPDATA");
+    if (!localAppData.empty()) {
+        baseDir = localAppData;
+    } else {
+        const auto userProfile = envValue("USERPROFILE");
+        if (!userProfile.empty()) {
+            baseDir = fs::path(userProfile) / "AppData" / "Local";
+        }
+    }
+#elif defined(__APPLE__)
+    const auto home = envValue("HOME");
+    if (!home.empty()) {
+        baseDir = fs::path(home) / "Library" / "Application Support";
+    }
 #else
-    constexpr char pathSeparator = ':';
+    const auto xdgDataHome = envValue("XDG_DATA_HOME");
+    if (!xdgDataHome.empty()) {
+        baseDir = xdgDataHome;
+    } else {
+        const auto home = envValue("HOME");
+        if (!home.empty()) {
+            baseDir = fs::path(home) / ".local" / "share";
+        }
+    }
 #endif
 
-    std::size_t start = 0;
-    while (start <= rawPaths.size()) {
-        const auto end = rawPaths.find(pathSeparator, start);
-        const auto length = end == std::string_view::npos
-            ? rawPaths.size() - start
-            : end - start;
-        if (length > 0) {
-            dirs.emplace_back(rawPaths.substr(start, length));
-        }
-        if (end == std::string_view::npos) {
-            break;
-        }
-        start = end + 1;
+    if (baseDir.empty()) {
+        baseDir = fs::current_path();
     }
 
-    return dirs;
+#if defined(_WIN32) || defined(__APPLE__)
+    return baseDir / "Libera" / "Plugins";
+#else
+    return baseDir / "libera" / "plugins";
+#endif
 }
 
 std::vector<std::string> defaultPluginDirectories() {
-    const char* env = std::getenv("LIBERA_PLUGIN_DIR");
-    if (env != nullptr && env[0] != '\0') {
-        return splitPluginSearchPath(env);
-    }
-
-    // Default plugin search order:
-    // - a plugins/ folder next to the executable
-    // - a sibling ../plugins folder for bin/ + plugins/ layouts
-    // - the same relative paths from the current working directory
-    return {"plugins", "../plugins"};
+    // Libera apps share one user-level plugin folder so installing a plugin
+    // once makes it available to every app in the Libera ecosystem.
+    return {defaultUserPluginDirectory().string()};
 }
 
 std::vector<std::string>& pluginDirStorage() {

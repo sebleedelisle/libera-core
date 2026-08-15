@@ -47,12 +47,11 @@ That maps directly onto Libera's built-in structure:
 ## Loading plugin libraries
 
 In the normal case you do not need to configure plugin directories at all.
-Libera already searches:
+Libera loads plugins from one shared user plugin folder:
 
-- `plugins/` next to the executable
-- `../plugins/` relative to the executable, which suits `bin/` + `plugins/`
-  layouts
-- the same relative paths from the current working directory
+- Windows: `%LOCALAPPDATA%\Libera\Plugins`
+- macOS: `~/Library/Application Support/Libera/Plugins`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/libera/plugins`
 
 So the simplest setup is just:
 
@@ -60,7 +59,8 @@ So the simplest setup is just:
 libera::System liberaSystem;
 ```
 
-Only configure plugin search paths if you want to override those defaults:
+Only configure plugin search paths if you deliberately want a custom plugin set,
+for example in a test, development tool, or portable host app:
 
 ```cpp
 libera::System::setPluginDirectory("plugins");
@@ -72,13 +72,56 @@ libera::System liberaSystem;
 Passing an empty string to `setPluginDirectory("")` disables plugin loading
 entirely for that process.
 
-If you never call `setPluginDirectory()`, Libera uses `LIBERA_PLUGIN_DIR` when
-that environment variable is set. `LIBERA_PLUGIN_DIR` can contain more than one
-directory, separated by `:` on POSIX and `;` on Windows.
+## Managing installed plugins
 
-There is not a first-class "plugin installer" in Libera itself today. Installing
-a plugin currently just means placing the shared library in one of those
-searched directories.
+GUI apps should use the small backend API in
+[PluginManagement.hpp](../include/libera/plugin/PluginManagement.hpp) rather
+than each app reimplementing plugin install/remove/list logic.
+
+The main functions are:
+
+- `libera::plugin::userPluginDirectory()`
+- `libera::plugin::listManagedPlugins()`
+- `libera::plugin::installPlugin(path)`
+- `libera::plugin::removePlugin(path)`
+- `libera::plugin::platformPluginExtension()`
+
+`listManagedPlugins()` merges the runtime `PluginRegistry` with shared-library
+files found in the user plugin folder. That gives apps enough state to render:
+
+- loaded plugins
+- validation/load failures
+- plugin files copied after startup, reported as `PendingRestart`
+- loaded plugin files removed from disk, reported as `RemovedPendingRestart`
+- runtime errors reported by a plugin while controllers are active
+
+`installPlugin()` validates the plugin using the same callback and ABI rules as
+the runtime loader before copying it into `userPluginDirectory()`. New installs
+need an app restart before `System` can load them, because plugin libraries are
+only scanned during startup.
+
+`removePlugin()` only removes files from `userPluginDirectory()`. Removing a
+loaded plugin does not unload native code from the current process, so the
+result reports `restartRequired=true`.
+
+### Optional ImGui panel
+
+Apps that use Dear ImGui can also opt into Libera's reusable plugin panel:
+
+```cmake
+include("path/to/libera-core/cmake/LiberaImguiWidgets.cmake")
+libera_add_imgui_plugin_ui(libera-plugin-ui-imgui imgui_lib)
+target_link_libraries(my-app PRIVATE libera-plugin-ui-imgui)
+```
+
+The panel entry point is:
+
+```cpp
+libera::gui::imgui::DrawPluginManagementPanel(state, callbacks, options);
+```
+
+The caller still owns the window, native file picker, restart behavior, and
+styling. The shared panel owns the install/remove/list/status UI.
 
 ## Required callbacks
 
