@@ -83,6 +83,10 @@ if (NOT LIBERA_ENABLE_PLUGINS)
     list(FILTER LIBERA_CORE_SOURCES EXCLUDE REGEX ".*/plugin/.*")
 endif()
 
+if (NOT TARGET libera-protocol-core)
+    list(FILTER LIBERA_CORE_SOURCES EXCLUDE REGEX ".*/src/liberaprotocol/.*")
+endif()
+
 # ----------------------------
 # Define the library target
 # ----------------------------
