@@ -29,6 +29,8 @@ option(LIBERA_ENABLE_PLUGINS "Enable runtime plugin loading (disable to exclude 
 option(LIBERA_BUILD_IMGUI_WIDGETS "Build optional reusable ImGui widgets" OFF)
 set(LIBERA_IMGUI_TARGET "imgui_lib" CACHE STRING
     "ImGui target linked by optional Libera ImGui widgets")
+set(LIBERA_PROTOCOL_SOURCE_DIR "" CACHE PATH
+    "Optional path to a libera-protocol source tree. Defaults to libs/libera-protocol when present.")
 
 # Optional: a few sensible warnings. Comment out if you prefer quiet builds.
 function(libera_apply_warnings target)
@@ -41,6 +43,18 @@ endfunction()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Sanitizers.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Libusb.cmake)
+
+# Libera Protocol is kept as a standalone repository. The cache override lets
+# local development use a sibling checkout while recursive clones use the
+# submodule in libs/libera-protocol.
+if (NOT TARGET libera-protocol-core)
+    if (LIBERA_PROTOCOL_SOURCE_DIR)
+        add_subdirectory("${LIBERA_PROTOCOL_SOURCE_DIR}"
+                         "${CMAKE_CURRENT_BINARY_DIR}/libera-protocol")
+    elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/libera-protocol/CMakeLists.txt")
+        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/libs/libera-protocol")
+    endif()
+endif()
 
 # --------------------------------
 # Helios SDK libusb selection
@@ -124,6 +138,10 @@ endif()
 target_sources(libera-core PRIVATE $<TARGET_OBJECTS:helios-sdk>)
 
 target_link_libraries(libera-core PUBLIC libusb::libusb)
+if (TARGET libera-protocol-core)
+    target_link_libraries(libera-core PUBLIC libera-protocol-core)
+    target_compile_definitions(libera-core PUBLIC LIBERA_HAS_PROTOCOL=1)
+endif()
 
 # Plugin runtime loading uses dlopen/dlsym on POSIX.
 if (NOT WIN32)
