@@ -50,10 +50,13 @@ private:
     bool readRecord(protocol::Record& record, std::chrono::milliseconds timeout);
     bool writeMessage(const std::vector<std::uint8_t>& bytes,
                       std::chrono::milliseconds timeout);
+    bool receiverHandlesScannerSync() const noexcept;
+    bool syncScannerSyncIfNeeded();
     bool sendFrameRecord();
     bool sendRawPointsRecord();
     bool sendPointsChunked(const std::vector<core::LaserPoint>& points);
     void markDisconnected();
+    std::int64_t currentScannerSyncOffsetNs() const;
 
     static std::vector<protocol::PointSample> encodePoints(
         const std::vector<core::LaserPoint>& points,
@@ -75,6 +78,9 @@ private:
     std::uint64_t nextFrameId = 1;
     std::uint64_t currentPointIndex = 0;
     std::chrono::steady_clock::time_point nextSendAt{};
+    bool scannerSyncSent = false;
+    std::int64_t lastScannerSyncOffsetNs = 0;
+    bool lastScannerSyncEnabled = false;
 };
 
 } // namespace libera::liberaprotocol

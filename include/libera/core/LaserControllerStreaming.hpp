@@ -294,6 +294,12 @@ protected:
     /// internal frame scheduler.
     void postProcessOutputPoints(std::vector<LaserPoint>& points);
 
+    /// Temporarily skip colour-delay scanner sync in postProcessOutputPoints().
+    /// Used by transports that send scanner-sync timing as protocol metadata
+    /// for the receiver to apply at the hardware edge.
+    void setScannerSyncPostProcessSuppressed(bool suppressed);
+    bool isScannerSyncPostProcessSuppressed() const noexcept;
+
     /// Metrics from the most recent requestPoints() call on this controller.
     const PointRequestMetrics& lastPointRequestMetrics() const noexcept;
 
@@ -356,6 +362,7 @@ protected:
     // Stores 1/10,000th of a second units so we match legacy colour-shift semantics.
     std::atomic<double> scannerSyncTime{2.0}; // in 1/10,000 of a second
     std::atomic<bool> scannerSyncEnabled{true};
+    std::atomic<bool> scannerSyncPostProcessSuppressed{false};
     // Arm/disarm can reset this delay line from the app thread while transport
     // workers are applying scanner sync, so every deque mutation is serialized.
     mutable std::mutex scannerSyncColourDelayLineMutex;

@@ -33,6 +33,14 @@ public:
     bool requestPoints(const PointFillRequest& request) {
         return LaserControllerStreaming::requestPoints(request);
     }
+
+    void setScannerSyncSuppressed(bool suppressed) {
+        setScannerSyncPostProcessSuppressed(suppressed);
+    }
+
+    bool scannerSyncSuppressed() const {
+        return isScannerSyncPostProcessSuppressed();
+    }
 };
 
 // ── Scanner sync default ─────────────────────────────────────────────
@@ -203,6 +211,53 @@ void testDisabledScannerSyncNoDelay() {
     ASSERT_EQ(batch[10].g, 1.0f, "disabled scanner sync should preserve later green samples");
 }
 
+void testSuppressedScannerSyncNoDelay() {
+    ScannerSyncHarness controller;
+    controller.setPointRate(10000);
+    controller.setArmed(true);
+    controller.setScannerSync(10.0);
+
+    controller.setRequestPointsCallback(
+        [](const PointFillRequest& req, std::vector<LaserPoint>& out) {
+            LaserPoint blank{};
+            for (std::size_t i = 0; i < req.maximumPointsRequired; ++i) {
+                out.push_back(blank);
+            }
+        });
+    PointFillRequest drain{};
+    drain.minimumPointsRequired = 20;
+    drain.maximumPointsRequired = 20;
+    controller.requestPoints(drain);
+
+    controller.setScannerSyncSuppressed(true);
+    ASSERT_TRUE(controller.scannerSyncSuppressed(), "scanner sync suppression should be set");
+
+    controller.setRequestPointsCallback(
+        [](const PointFillRequest& req, std::vector<LaserPoint>& out) {
+            for (std::size_t i = 0; i < req.maximumPointsRequired; ++i) {
+                LaserPoint p{};
+                p.x = static_cast<float>(i);
+                p.r = i == 0 ? 1.0f : 0.0f;
+                p.g = i == 0 ? 0.0f : 1.0f;
+                out.push_back(p);
+            }
+        });
+
+    PointFillRequest request{};
+    request.minimumPointsRequired = 20;
+    request.maximumPointsRequired = 20;
+
+    ASSERT_TRUE(controller.requestPoints(request), "requestPoints succeeds with scanner sync suppressed");
+    const auto& batch = controller.lastBatch();
+    ASSERT_EQ(batch[0].r, 1.0f, "suppressed scanner sync should not delay first red sample");
+    ASSERT_EQ(batch[0].g, 0.0f, "suppressed scanner sync should preserve first green sample");
+    ASSERT_EQ(batch[10].r, 0.0f, "suppressed scanner sync should not replay red later");
+    ASSERT_EQ(batch[10].g, 1.0f, "suppressed scanner sync should preserve later green samples");
+
+    controller.setScannerSyncSuppressed(false);
+    ASSERT_TRUE(!controller.scannerSyncSuppressed(), "scanner sync suppression should clear");
+}
+
 // ── Disarmed forces all black ────────────────────────────────────────
 
 void testDisarmedForcesBlack() {
@@ -298,6 +353,7 @@ int main() {
     testColourDelayShiftsRGB();
     testZeroSyncNoDelay();
     testDisabledScannerSyncNoDelay();
+    testSuppressedScannerSyncNoDelay();
     testDisarmedForcesBlack();
     testArmToggleDoesNotRaceScannerSyncDelayLine();
 

@@ -279,7 +279,8 @@ void LaserControllerStreaming::postProcessOutputPoints(std::vector<LaserPoint>& 
         }
     } 
 
-    if (!scannerSyncEnabled.load(std::memory_order_relaxed)) {
+    if (scannerSyncPostProcessSuppressed.load(std::memory_order_relaxed) ||
+        !scannerSyncEnabled.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
         scannerSyncColourDelayLine.clear();
         return;
@@ -859,6 +860,19 @@ void LaserControllerStreaming::setScannerSyncEnabled(bool enabled) {
 
 bool LaserControllerStreaming::isScannerSyncEnabled() const noexcept {
     return scannerSyncEnabled.load(std::memory_order_relaxed);
+}
+
+void LaserControllerStreaming::setScannerSyncPostProcessSuppressed(bool suppressed) {
+    const bool wasSuppressed =
+        scannerSyncPostProcessSuppressed.exchange(suppressed, std::memory_order_relaxed);
+    if (wasSuppressed != suppressed) {
+        std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
+        scannerSyncColourDelayLine.clear();
+    }
+}
+
+bool LaserControllerStreaming::isScannerSyncPostProcessSuppressed() const noexcept {
+    return scannerSyncPostProcessSuppressed.load(std::memory_order_relaxed);
 }
 
 } // namespace libera::core

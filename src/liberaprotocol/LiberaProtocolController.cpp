@@ -24,6 +24,7 @@ constexpr std::uint32_t defaultMaxFramePoints = 300000;
 constexpr std::uint32_t defaultMaxRecordPayloadBytes = 4u * 1024u * 1024u;
 constexpr std::size_t rawPointBatchSize = 4096;
 constexpr std::uint8_t maxLaserPointUserChannels = 2;
+constexpr double scannerSyncUnitNanoseconds = 100000.0;
 
 std::int16_t encodeSignedCoord(float value) {
     const float clamped = std::clamp(value, -1.0f, 1.0f);
@@ -176,6 +177,7 @@ bool LiberaProtocolController::performHandshake(const LiberaProtocolControllerIn
     session.sessionId = accept.sessionId;
     session.featureFlags = accept.featureFlags;
     session.sessionStartedAt = std::chrono::steady_clock::now();
+    scannerSyncSent = false;
     sender.setUserChannelCount(session.userChannelCount);
     LaserControllerStreaming::setPointRate(std::clamp<std::uint32_t>(
         session.pointRate,
@@ -190,7 +192,11 @@ bool LiberaProtocolController::performHandshake(const LiberaProtocolControllerIn
     config.defaultPointRate = getPointRate();
     config.streamMode = session.streamMode;
     config.userChannelCount = session.userChannelCount;
-    return writeMessage(sender.makeStreamConfig(config), 500ms);
+    if (!writeMessage(sender.makeStreamConfig(config), 500ms)) {
+        return false;
+    }
+
+    return syncScannerSyncIfNeeded();
 }
 
 bool LiberaProtocolController::reconnectToLatestInfo() {
@@ -217,6 +223,8 @@ void LiberaProtocolController::close() {
     }
     networkConnected.store(false, std::memory_order_relaxed);
     reconnectRequested.store(false, std::memory_order_relaxed);
+    scannerSyncSent = false;
+    setScannerSyncPostProcessSuppressed(false);
     setConnectionState(false);
     clearEstimatedBufferState();
 }
@@ -224,6 +232,8 @@ void LiberaProtocolController::close() {
 void LiberaProtocolController::markDisconnected() {
     networkConnected.store(false, std::memory_order_relaxed);
     reconnectRequested.store(true, std::memory_order_relaxed);
+    scannerSyncSent = false;
+    setScannerSyncPostProcessSuppressed(false);
     setConnectionState(false);
     recordConnectionError(error_types::network::connectionLost);
     if (tcpClient) {
@@ -280,6 +290,49 @@ bool LiberaProtocolController::writeMessage(const std::vector<std::uint8_t>& byt
     return true;
 }
 
+bool LiberaProtocolController::receiverHandlesScannerSync() const noexcept {
+    return (session.featureFlags & protocol::FeatureScannerSync) != 0;
+}
+
+std::int64_t LiberaProtocolController::currentScannerSyncOffsetNs() const {
+    const double offsetUnits = getScannerSync();
+    if (!std::isfinite(offsetUnits) || offsetUnits <= 0.0) {
+        return 0;
+    }
+    const double maxNs =
+        static_cast<double>(std::numeric_limits<std::int64_t>::max());
+    const double clampedUnits = std::min(offsetUnits, maxNs / scannerSyncUnitNanoseconds);
+    return static_cast<std::int64_t>(std::llround(clampedUnits * scannerSyncUnitNanoseconds));
+}
+
+bool LiberaProtocolController::syncScannerSyncIfNeeded() {
+    if (!receiverHandlesScannerSync()) {
+        scannerSyncSent = false;
+        setScannerSyncPostProcessSuppressed(false);
+        return true;
+    }
+
+    const auto offsetNs = currentScannerSyncOffsetNs();
+    const bool enabled = isScannerSyncEnabled();
+    if (scannerSyncSent &&
+        offsetNs == lastScannerSyncOffsetNs &&
+        enabled == lastScannerSyncEnabled) {
+        return true;
+    }
+
+    protocol::ScannerSync scannerSync;
+    scannerSync.offsetNs = offsetNs;
+    scannerSync.enabled = enabled;
+    if (!writeMessage(sender.makeScannerSync(scannerSync), 250ms)) {
+        return false;
+    }
+
+    scannerSyncSent = true;
+    lastScannerSyncOffsetNs = offsetNs;
+    lastScannerSyncEnabled = enabled;
+    return true;
+}
+
 void LiberaProtocolController::run() {
     resetStartupBlank();
 
@@ -322,6 +375,9 @@ bool LiberaProtocolController::sendFrameRecord() {
     if (!networkConnected.load(std::memory_order_relaxed)) {
         return false;
     }
+    if (!syncScannerSyncIfNeeded()) {
+        return false;
+    }
 
     const auto activePointRate = getPointRate();
     const std::size_t maxFramePoints = std::max<std::size_t>(1, session.maxFramePointCount);
@@ -334,7 +390,16 @@ bool LiberaProtocolController::sendFrameRecord() {
     request.currentPointIndex = currentPointIndex;
     request.advanceWhenAvailable = true;
 
-    if (!requestFrame(request, frame) || frame.points.empty()) {
+    const bool suppressScannerSync = receiverHandlesScannerSync();
+    if (suppressScannerSync) {
+        setScannerSyncPostProcessSuppressed(true);
+    }
+    const bool requestOk = requestFrame(request, frame);
+    if (suppressScannerSync) {
+        setScannerSyncPostProcessSuppressed(false);
+    }
+
+    if (!requestOk || frame.points.empty()) {
         return false;
     }
 
@@ -369,12 +434,25 @@ bool LiberaProtocolController::sendFrameRecord() {
 }
 
 bool LiberaProtocolController::sendRawPointsRecord() {
+    if (!syncScannerSyncIfNeeded()) {
+        return false;
+    }
+
     core::PointFillRequest request;
     request.minimumPointsRequired = rawPointBatchSize;
     request.maximumPointsRequired = rawPointBatchSize;
     request.estimatedFirstPointRenderTime = std::chrono::steady_clock::now();
     request.currentPointIndex = currentPointIndex;
-    if (!requestPoints(request) || pointsToSend.empty()) {
+    const bool suppressScannerSync = receiverHandlesScannerSync();
+    if (suppressScannerSync) {
+        setScannerSyncPostProcessSuppressed(true);
+    }
+    const bool requestOk = requestPoints(request);
+    if (suppressScannerSync) {
+        setScannerSyncPostProcessSuppressed(false);
+    }
+
+    if (!requestOk || pointsToSend.empty()) {
         return false;
     }
 
