@@ -4,8 +4,35 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <limits>
 
 namespace libera::core {
+namespace {
+
+constexpr std::size_t liberationMinBlankRunPoints = 4;
+constexpr float liberationHomeThreshold = 0.03f;
+constexpr float liberationTransitionDistanceThreshold = 0.15f;
+constexpr float liberationBoundaryScoreThreshold = 0.55f;
+constexpr float liberationBlankRunScoreTarget = 64.0f;
+constexpr float liberationHomeDwellScoreTarget = 8.0f;
+
+float distanceBetween(const LaserPoint& a, const LaserPoint& b) {
+    const float dx = a.x - b.x;
+    const float dy = a.y - b.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+float forgivingSizeScore(std::size_t candidateIndex, std::size_t nominalFrameSize) {
+    if (nominalFrameSize == 0) {
+        return 0.0f;
+    }
+
+    const float sizeRatio =
+        static_cast<float>(candidateIndex) / static_cast<float>(nominalFrameSize);
+    return 1.0f - std::clamp(std::abs(sizeRatio - 1.0f) * 0.35f, 0.0f, 1.0f);
+}
+
+} // namespace
 
 void PointStreamFramer::setNominalFrameSize(std::size_t size) {
     nominalFrameSize = std::max<std::size_t>(size, 1);
@@ -205,8 +232,8 @@ std::size_t PointStreamFramer::findNaturalBoundary() const {
         return 0;
     }
 
-    std::size_t bestCandidate = 0;
-    float bestScore = -1.0f;
+    std::size_t bestLoopCandidate = 0;
+    float bestLoopScore = -1.0f;
 
     for (std::size_t i = windowStart; i < windowEnd; ++i) {
         const LaserPoint& p = accumulator[i];
@@ -239,18 +266,177 @@ std::size_t PointStreamFramer::findNaturalBoundary() const {
 
         const float score = positionScore * 0.6f + sizeScore * 0.3f + gapEndBonus * 0.1f;
 
-        if (score > bestScore) {
-            bestScore = score;
-            bestCandidate = i + 1; // Split AFTER this blanked point.
+        if (score > bestLoopScore) {
+            bestLoopScore = score;
+            bestLoopCandidate = i + 1; // Split AFTER this blanked point.
         }
     }
 
-    // Require a minimum quality threshold.
-    if (bestScore < 0.3f) {
-        return 0;
+    // Liberation/ofxLaser-style source frames are not always spatially closed
+    // against the first accumulator point. When a new frame starts elsewhere,
+    // the source frame is usually:
+    //   blank move from previous home -> current first lit point,
+    //   lit content,
+    //   blank return to current first lit point,
+    //   blank move toward the next frame's first lit point.
+    //
+    // The best split for frame-ingester DACs is near the current first lit point
+    // before the outgoing blank travel, so the next emitted frame starts dark.
+    std::size_t firstLitIndex = 0;
+    bool firstLitSet = false;
+    for (std::size_t i = 0; i < windowEnd; ++i) {
+        if (!isBlanked(accumulator[i])) {
+            firstLitIndex = i;
+            firstLitSet = true;
+            break;
+        }
     }
 
-    return bestCandidate;
+    std::size_t bestTransitionCandidate = 0;
+    float bestTransitionScore = -1.0f;
+
+    if (firstLitSet) {
+        const LaserPoint& frameHome = accumulator[firstLitIndex];
+
+        for (std::size_t runStart = 0; runStart < windowEnd;) {
+            if (!isBlanked(accumulator[runStart])) {
+                ++runStart;
+                continue;
+            }
+
+            std::size_t runEnd = runStart + 1;
+            while (runEnd < accumulator.size() && isBlanked(accumulator[runEnd])) {
+                ++runEnd;
+            }
+
+            const std::size_t runLength = runEnd - runStart;
+            const bool overlapsSearchWindow =
+                runEnd > windowStart && runStart < windowEnd;
+            const bool hasFollowingLit =
+                runEnd < accumulator.size() && !isBlanked(accumulator[runEnd]);
+
+            if (overlapsSearchWindow &&
+                hasFollowingLit &&
+                runLength >= liberationMinBlankRunPoints) {
+                std::size_t closestHomeIndex = runStart;
+                float closestHomeDistance = std::numeric_limits<float>::max();
+
+                for (std::size_t i = runStart; i < runEnd; ++i) {
+                    const float distanceToHome = distanceBetween(accumulator[i], frameHome);
+                    if (distanceToHome <= closestHomeDistance) {
+                        closestHomeDistance = distanceToHome;
+                        closestHomeIndex = i;
+                    }
+                }
+
+                if (closestHomeDistance <= liberationHomeThreshold) {
+                    std::size_t firstNearHomeIndex = closestHomeIndex;
+                    while (firstNearHomeIndex > runStart &&
+                           distanceBetween(accumulator[firstNearHomeIndex - 1], frameHome) <=
+                               liberationHomeThreshold) {
+                        --firstNearHomeIndex;
+                    }
+
+                    std::size_t lastNearHomeIndex = closestHomeIndex;
+                    while (lastNearHomeIndex + 1 < runEnd &&
+                           distanceBetween(accumulator[lastNearHomeIndex + 1], frameHome) <=
+                               liberationHomeThreshold) {
+                        ++lastNearHomeIndex;
+                    }
+
+                    const std::size_t splitIndex = lastNearHomeIndex;
+                    const std::size_t nearHomePointCount =
+                        (lastNearHomeIndex - firstNearHomeIndex) + 1;
+                    const bool returnedToHome = firstNearHomeIndex > runStart;
+                    const float runTailDistance =
+                        distanceBetween(accumulator[runEnd - 1], frameHome);
+                    const float nextLitDistance =
+                        distanceBetween(accumulator[runEnd], frameHome);
+                    const float departureDistance = std::max(runTailDistance, nextLitDistance);
+
+                    if (splitIndex >= windowStart &&
+                        splitIndex < windowEnd &&
+                        splitIndex > 0 &&
+                        lastNearHomeIndex + 1 < runEnd &&
+                        departureDistance >= liberationTransitionDistanceThreshold) {
+                        const float homeScore =
+                            1.0f - std::clamp(closestHomeDistance / liberationHomeThreshold,
+                                               0.0f,
+                                               1.0f);
+                        const float travelScore =
+                            std::clamp(departureDistance /
+                                           liberationTransitionDistanceThreshold,
+                                       0.0f,
+                                       1.0f);
+                        const float sizeScore = forgivingSizeScore(splitIndex, nominalFrameSize);
+                        const float runLengthScore =
+                            std::clamp(static_cast<float>(runLength) /
+                                           liberationBlankRunScoreTarget,
+                                       0.0f,
+                                       1.0f);
+                        const float homeDwellScore =
+                            std::clamp(static_cast<float>(nearHomePointCount) /
+                                           liberationHomeDwellScoreTarget,
+                                       0.0f,
+                                       1.0f);
+                        const float returnScore = returnedToHome ? 1.0f : 0.0f;
+
+                        // Internal closed shapes can start their blank move at
+                        // frameHome. A real renderer frame end is stronger when
+                        // the blank run returns to frameHome and lingers there.
+                        const float score = homeScore * 0.25f +
+                                            travelScore * 0.20f +
+                                            sizeScore * 0.20f +
+                                            runLengthScore * 0.10f +
+                                            homeDwellScore * 0.15f +
+                                            returnScore * 0.10f;
+
+                        if (score >= liberationBoundaryScoreThreshold &&
+                            score > bestTransitionScore) {
+                            bestTransitionScore = score;
+                            bestTransitionCandidate =
+                                splitIndex; // Split BEFORE outgoing blank travel.
+                        }
+                    }
+                }
+            }
+
+            runStart = runEnd;
+        }
+    }
+
+    const bool hasLoopBoundary = bestLoopCandidate > 0 && bestLoopScore >= 0.3f;
+    const bool hasTransitionBoundary =
+        bestTransitionCandidate > 0 &&
+        bestTransitionScore >= liberationBoundaryScoreThreshold;
+
+    if (hasLoopBoundary && hasTransitionBoundary) {
+        // If a solid loop closure appears before the renderer-transition
+        // candidate, keep the closed-frame split. This prevents multi-shape
+        // frames from being cut at a later internal return-to-first-shape move.
+        if (bestLoopCandidate < bestTransitionCandidate) {
+            return bestLoopCandidate;
+        }
+
+        // If the transition comes first, the later loop closure is usually the
+        // next frame's leading move returning to the old anchor.
+        if (bestTransitionCandidate < bestLoopCandidate &&
+            bestTransitionScore >= bestLoopScore - 0.15f) {
+            return bestTransitionCandidate;
+        }
+
+        return bestLoopCandidate;
+    }
+
+    if (hasTransitionBoundary) {
+        return bestTransitionCandidate;
+    }
+
+    if (hasLoopBoundary) {
+        return bestLoopCandidate;
+    }
+
+    return 0;
 }
 
 bool PointStreamFramer::isBlanked(const LaserPoint& p) {
