@@ -284,6 +284,15 @@ LaserController::getPointCallbackBufferBreakdown() const {
     return breakdown;
 }
 
+LaserController::FrameTransportMetrics LaserController::frameTransportMetrics() const noexcept {
+    FrameTransportMetrics metrics;
+    metrics.submittedFrames =
+        frameTransportSubmittedFrames.load(std::memory_order_relaxed);
+    metrics.submittedPoints =
+        frameTransportSubmittedPoints.load(std::memory_order_relaxed);
+    return metrics;
+}
+
 bool LaserController::requestPoints(const PointFillRequest& request) {
     ContentSource source = ContentSource::None;
     {
@@ -471,6 +480,9 @@ void LaserController::noteFrameTransportSubmissionBounded(
     if (pointCount == 0) {
         return;
     }
+
+    frameTransportSubmittedFrames.fetch_add(1, std::memory_order_relaxed);
+    frameTransportSubmittedPoints.fetch_add(pointCount, std::memory_order_relaxed);
 
     if (pointRateValue == 0) {
         pointRateValue = getPointRate();

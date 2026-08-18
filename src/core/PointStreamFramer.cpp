@@ -201,6 +201,7 @@ void PointStreamFramer::pullPoints(const RequestPointsCallback& callback,
     PointFillRequest req = templateRequest;
     req.minimumPointsRequired = count;
     req.maximumPointsRequired = count;
+    req.allowShortRead = true;
     // Keep the callback's absolute point index advancing from the transport's
     // current playout cursor rather than restarting at zero inside the framer.
     req.currentPointIndex = templateRequest.currentPointIndex + totalPointsConsumed;

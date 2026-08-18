@@ -40,6 +40,11 @@ public:
         std::size_t totalBufferedPoints = 0;
     };
 
+    struct FrameTransportMetrics {
+        std::uint64_t submittedFrames = 0;
+        std::uint64_t submittedPoints = 0;
+    };
+
     using PointCallback = RequestPointsCallback;
 
     LaserController();
@@ -125,6 +130,7 @@ public:
     std::size_t queuedFrameCount() const;
     std::optional<BufferState> getBufferState() const override;
     std::optional<PointCallbackBufferBreakdown> getPointCallbackBufferBreakdown() const;
+    FrameTransportMetrics frameTransportMetrics() const noexcept;
 
 protected:
     struct FrameFillRequest {
@@ -223,6 +229,8 @@ private:
     ContentSource activeSource = ContentSource::None;
     mutable std::mutex frameTransportEstimateMutex;
     FrameTransportEstimate frameTransportEstimate;
+    std::atomic<std::uint64_t> frameTransportSubmittedFrames{0};
+    std::atomic<std::uint64_t> frameTransportSubmittedPoints{0};
     std::atomic<std::size_t> lastPointCallbackVirtualBufferTarget{0};
     std::size_t queuedPointBudget() const;
 };

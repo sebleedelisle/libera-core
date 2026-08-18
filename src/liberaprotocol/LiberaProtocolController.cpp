@@ -153,7 +153,20 @@ bool LiberaProtocolController::performHandshake(const LiberaProtocolControllerIn
     }
 
     protocol::Record record;
-    if (!readRecord(record, 1000ms) || record.type != protocol::RecordType::Accept) {
+    if (!readRecord(record, 1000ms)) {
+        return false;
+    }
+    if (record.type == protocol::RecordType::Reject) {
+        protocol::Reject reject;
+        std::string error;
+        if (protocol::decodeReject(record.payload.data(), record.payload.size(), reject, error)) {
+            logError("[LiberaProtocolController] session rejected",
+                     static_cast<int>(reject.code),
+                     reject.message);
+        }
+        return false;
+    }
+    if (record.type != protocol::RecordType::Accept) {
         return false;
     }
 

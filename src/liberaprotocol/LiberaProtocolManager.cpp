@@ -136,6 +136,12 @@ LiberaProtocolManager::createController(const LiberaProtocolControllerInfo& info
 LiberaProtocolManager::NewControllerDisposition
 LiberaProtocolManager::prepareNewController(LiberaProtocolController& controller,
                                             const LiberaProtocolControllerInfo& info) {
+    if (info.advertisement().availability != protocol::EndpointAvailability::Available) {
+        logInfo("[LiberaProtocolManager] endpoint is not available",
+                info.labelValue(),
+                static_cast<int>(info.advertisement().availability));
+        return NewControllerDisposition::DropController;
+    }
     if (auto result = controller.connect(info); !result) {
         logError("[LiberaProtocolManager] initial connect failed", result.error().message());
         return NewControllerDisposition::DropController;

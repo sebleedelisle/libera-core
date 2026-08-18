@@ -364,6 +364,7 @@ void PluginController::run() {
             if (request.blankFramePointCount == 0) {
                 request.blankFramePointCount = request.preferredPointCount;
             }
+            request.advanceWhenAvailable = true;
 
             // Drive the FrameScheduler's due-time gate from the host's shared
             // projection so the plugin path doesn't suffer the same "next frame

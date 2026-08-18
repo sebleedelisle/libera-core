@@ -39,6 +39,10 @@ struct PointFillRequest {
     /// Absolute running counter for emitted points.
     std::uint64_t currentPointIndex = 0;
 
+    /// Internal source-pull requests may return fewer real points instead of
+    /// padding with transport fallback blanks.
+    bool allowShortRead = false;
+
     [[nodiscard]] bool needsPoints(std::size_t minPoints) const {
         return (minimumPointsRequired > minPoints) || (maximumPointsRequired > minPoints);
     }

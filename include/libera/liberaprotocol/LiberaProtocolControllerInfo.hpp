@@ -31,6 +31,16 @@ public:
         if (advertisement_.address.empty()) {
             advertisement_.address = sourceAddress_;
         }
+        switch (advertisement_.availability) {
+        case protocol::EndpointAvailability::Available:
+            setUsageState(core::ControllerUsageState::Idle);
+            break;
+        case protocol::EndpointAvailability::Busy:
+        case protocol::EndpointAvailability::Disabled:
+        case protocol::EndpointAvailability::Fault:
+            setUsageState(core::ControllerUsageState::BusyExclusive);
+            break;
+        }
     }
 
     const protocol::DiscoveryAdvertisement& advertisement() const {

@@ -60,6 +60,7 @@ Each ingest endpoint should periodically advertise:
 - human-readable name
 - TCP host/port for sessions
 - endpoint type, such as `dac`, `bridge`, or `virtual`
+- current availability, such as `available`, `busy`, `disabled`, or `fault`
 - supported point-rate range
 - maximum frame point count
 - supported user-channel count range
@@ -73,6 +74,11 @@ Each ingest endpoint should periodically advertise:
 Senders should also be able to send a UDP query and receive an immediate unicast
 advertisement. Periodic advertisements alone are too slow for manual refreshes
 and UI discovery.
+
+Discovery availability is advisory. It helps sender UIs avoid offering an
+endpoint that is already owned, but TCP session negotiation is authoritative.
+If two senders race an `available` advertisement, the receiver must accept only
+one session and reject the other with a busy reason.
 
 ## TCP session requirements
 
@@ -156,6 +162,10 @@ The ingest endpoint responds with `ACCEPT` or `REJECT`.
 
 After `ACCEPT`, the sender sends `READY`. Data messages should not be accepted
 before `READY`.
+
+If an endpoint already has an exclusive active session, the ingest endpoint
+should respond to `HELLO` with `REJECT_BUSY` and close the connection. Rejected
+connections must not reset or otherwise disturb the active session.
 
 ## Point format
 
@@ -457,6 +467,8 @@ Protocol scope:
 
 - UDP discovery with query/reply and periodic advertisements.
 - One TCP client session per advertised endpoint.
+- Endpoint availability in discovery and authoritative busy rejection during
+  TCP handshake.
 - Handshake with protocol version, point format, stream mode, point-rate limits,
   maximum message size, and maximum frame point count.
 - Compact post-handshake record header with no per-record protocol version.
