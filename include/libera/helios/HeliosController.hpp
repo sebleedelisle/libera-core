@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,7 @@ public:
     // Helios cause every other Helios to appear "(in use)" from another app.
     // This factory opens only the selected physical DAC identified by port path.
     static std::shared_ptr<HeliosController> connectUsb(std::shared_ptr<libusb_context> usbContext,
+                                                        std::shared_ptr<std::mutex> usbLifecycleMutex,
                                                         std::string controllerPortPath);
     ~HeliosController() override;
 
@@ -73,8 +75,12 @@ private:
 
     // Simple counters used for log throttling and health diagnostics.
     std::size_t consecutiveStatusErrors = 0;
+    std::size_t consecutiveStatusTimeouts = 0;
     std::size_t consecutiveWriteErrors = 0;
+    std::size_t consecutiveWriteTimeouts = 0;
+    std::size_t reconnectAttemptCount = 0;
     std::chrono::steady_clock::time_point statusWarmupDeadline{};
+    std::chrono::steady_clock::time_point nextReconnectAttempt{};
 };
 
 } // namespace libera::helios

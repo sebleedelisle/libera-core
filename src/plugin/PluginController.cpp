@@ -131,7 +131,10 @@ bool PluginController::open() {
         api->set_point_rate(pluginHandle, getPointRate());
     }
 
-    lastSentArmed = !isArmed();
+    lastSentArmed = isArmed();
+    if (api->set_armed) {
+        api->set_armed(pluginHandle, lastSentArmed);
+    }
     currentPointIndex = 0;
     smoothedSendFrameMicros = 0;
     return true;
@@ -293,7 +296,10 @@ void PluginController::run() {
                 api->set_point_rate(pluginHandle, getPointRate());
             }
 
-            lastSentArmed = !isArmed();
+            lastSentArmed = isArmed();
+            if (api->set_armed) {
+                api->set_armed(pluginHandle, lastSentArmed);
+            }
             currentPointIndex = 0;
             smoothedSendFrameMicros = 0;
             resetStartupBlank();
@@ -358,6 +364,7 @@ void PluginController::run() {
             if (request.blankFramePointCount == 0) {
                 request.blankFramePointCount = request.preferredPointCount;
             }
+            request.advanceWhenAvailable = true;
 
             // Drive the FrameScheduler's due-time gate from the host's shared
             // projection so the plugin path doesn't suffer the same "next frame
@@ -422,9 +429,16 @@ void PluginController::run() {
             const int capacity = bufferState.total_buffer_points;
             const int fullness = bufferState.points_in_buffer;
             const int freeSpace = std::max(0, capacity - fullness);
+            const int fallbackBatch = fallbackBatchPointCount(rate);
+            const int smallBufferFloor =
+                capacity <= (fallbackBatch * 4) ? (capacity / 2) : 0;
+            const int minimumTarget = std::clamp(
+                std::max(fallbackBatch, smallBufferFloor),
+                1,
+                capacity);
             const int target = core::BufferEstimator::targetBufferPoints(
                 rate, capacity, targetLatency(),
-                /* minimumBufferFloor   */ 0,
+                /* minimumBufferFloor   */ minimumTarget,
                 /* safetyHeadroomPoints */ 0);
             const int deficit = std::max(0, target - fullness);
 

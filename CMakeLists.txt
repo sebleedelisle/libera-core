@@ -26,6 +26,11 @@ option(LIBERA_BUILD_HARDWARE_TESTS "Build hardware tests (requires controller ha
 option(LIBERA_BUILD_EXAMPLES "Build example applications" OFF)
 option(LIBERA_BUILD_LASER_TOOL "Build the GUI laser-tool example" ON)
 option(LIBERA_ENABLE_PLUGINS "Enable runtime plugin loading (disable to exclude all plugin code)" ON)
+option(LIBERA_BUILD_IMGUI_WIDGETS "Build optional reusable ImGui widgets" OFF)
+set(LIBERA_IMGUI_TARGET "imgui_lib" CACHE STRING
+    "ImGui target linked by optional Libera ImGui widgets")
+set(LIBERA_PROTOCOL_SOURCE_DIR "" CACHE PATH
+    "Optional path to a libera-protocol source tree. Defaults to libs/libera-protocol when present.")
 
 # Optional: a few sensible warnings. Comment out if you prefer quiet builds.
 function(libera_apply_warnings target)
@@ -38,6 +43,18 @@ endfunction()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Sanitizers.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Libusb.cmake)
+
+# Libera Protocol is kept as a standalone repository. The cache override lets
+# local development use a sibling checkout while recursive clones use the
+# submodule in libs/libera-protocol.
+if (NOT TARGET libera-protocol-core)
+    if (LIBERA_PROTOCOL_SOURCE_DIR)
+        add_subdirectory("${LIBERA_PROTOCOL_SOURCE_DIR}"
+                         "${CMAKE_CURRENT_BINARY_DIR}/libera-protocol")
+    elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/libera-protocol/CMakeLists.txt")
+        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/libs/libera-protocol")
+    endif()
+endif()
 
 # --------------------------------
 # Helios SDK libusb selection
@@ -58,9 +75,16 @@ file(GLOB_RECURSE LIBERA_CORE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 
+# Optional GUI widgets depend on ImGui and are built as a separate target.
+list(FILTER LIBERA_CORE_SOURCES EXCLUDE REGEX ".*/src/gui/.*")
+
 # Exclude plugin sources when plugin support is disabled.
 if (NOT LIBERA_ENABLE_PLUGINS)
     list(FILTER LIBERA_CORE_SOURCES EXCLUDE REGEX ".*/plugin/.*")
+endif()
+
+if (NOT TARGET libera-protocol-core)
+    list(FILTER LIBERA_CORE_SOURCES EXCLUDE REGEX ".*/src/liberaprotocol/.*")
 endif()
 
 # ----------------------------
@@ -118,10 +142,23 @@ endif()
 target_sources(libera-core PRIVATE $<TARGET_OBJECTS:helios-sdk>)
 
 target_link_libraries(libera-core PUBLIC libusb::libusb)
+if (TARGET libera-protocol-core)
+    target_link_libraries(libera-core PUBLIC libera-protocol-core)
+    target_compile_definitions(libera-core PUBLIC LIBERA_HAS_PROTOCOL=1)
+endif()
 
-# Plugin system needs dlopen/dlsym on POSIX.
-if (LIBERA_ENABLE_PLUGINS AND NOT WIN32)
+# Plugin runtime loading uses dlopen/dlsym on POSIX.
+if (NOT WIN32)
     target_link_libraries(libera-core PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/LiberaImguiWidgets.cmake)
+if (LIBERA_BUILD_IMGUI_WIDGETS)
+    if (NOT LIBERA_ENABLE_PLUGINS)
+        message(FATAL_ERROR
+            "LIBERA_BUILD_IMGUI_WIDGETS requires LIBERA_ENABLE_PLUGINS")
+    endif()
+    libera_add_imgui_plugin_ui(libera-plugin-ui-imgui "${LIBERA_IMGUI_TARGET}")
 endif()
 
 # Windows needs Winsock2 for TCP and UDP symbols. Linux and macOS do not.

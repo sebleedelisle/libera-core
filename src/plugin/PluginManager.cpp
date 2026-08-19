@@ -4,6 +4,8 @@
 #include "libera/plugin/PluginRegistry.hpp"
 #include "libera/log/Log.hpp"
 
+#include "PluginValidation.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
@@ -115,66 +117,6 @@ bool pluginApiSupportsFrameTransport(const libera_plugin_api_t* api) {
     return api &&
            api->get_frame_requirements &&
            api->send_frame;
-}
-
-bool isSharedLibrary(const fs::path& path) {
-    const auto ext = path.extension().string();
-    return ext == ".dylib" || ext == ".so" || ext == ".dll";
-}
-
-std::string validatePluginApi(const libera_plugin_api_t* api) {
-    if (!api) {
-        return "returned a null API table";
-    }
-
-    if (api->abi_version != LIBERA_PLUGIN_API_VERSION) {
-        return "ABI version mismatch (plugin=" +
-               std::to_string(api->abi_version) +
-               ", host=" + std::to_string(LIBERA_PLUGIN_API_VERSION) + ")";
-    }
-
-    if (!api->type_name || !*api->type_name) {
-        return "missing type_name";
-    }
-
-    if (!api->display_name || !*api->display_name) {
-        return "missing display_name";
-    }
-
-    if (!api->discover) {
-        return "missing discover()";
-    }
-
-    if (!api->connect_controller) {
-        return "missing connect_controller()";
-    }
-
-    if (!api->destroy_controller) {
-        return "missing destroy_controller()";
-    }
-
-    const bool hasPointTransport = api->send_points != nullptr;
-
-    const bool hasFrameRequirements = api->get_frame_requirements != nullptr;
-    const bool hasFrameSender = api->send_frame != nullptr;
-    if (hasFrameRequirements != hasFrameSender) {
-        return "must provide both get_frame_requirements() and send_frame()";
-    }
-    const bool hasFrameTransport = hasFrameRequirements && hasFrameSender;
-
-    if (!hasPointTransport && !hasFrameTransport) {
-        return "missing send_points() or get_frame_requirements()+send_frame()";
-    }
-
-    if (api->property_count > 0 && !api->properties) {
-        return "declared properties without a property table";
-    }
-
-    if (api->property_count > 0 && !api->read_property) {
-        return "declared properties without read_property()";
-    }
-
-    return {};
 }
 
 core::ControllerUsageState toUsageState(libera_controller_usage_state_t usageState) {
@@ -388,7 +330,7 @@ void loadPluginsFromDirectory(const std::string& path) {
 
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(path, ec)) {
-        if (entry.is_regular_file() && isSharedLibrary(entry.path())) {
+        if (entry.is_regular_file() && isSharedLibraryPath(entry.path())) {
             candidates.push_back(entry.path());
         }
     }

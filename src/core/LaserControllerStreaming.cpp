@@ -26,10 +26,84 @@
 
 namespace libera::core {
 namespace {
+
+#if defined(_WIN32)
+class WindowsMmcssThreadRegistration {
+public:
+    WindowsMmcssThreadRegistration() {
+        if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST)) {
+            logInfo("[LaserControllerStreaming] SetThreadPriority failed", static_cast<int>(GetLastError()));
+        }
+
+        avrtModule = LoadLibraryW(L"avrt.dll");
+        if (!avrtModule) {
+            logInfo("[LaserControllerStreaming] LoadLibraryW(avrt.dll) failed",
+                    static_cast<int>(GetLastError()));
+            return;
+        }
+
+        setCharacteristics = reinterpret_cast<AvSetMmThreadCharacteristicsWFn>(
+            GetProcAddress(avrtModule, "AvSetMmThreadCharacteristicsW"));
+        setPriority = reinterpret_cast<AvSetMmThreadPriorityFn>(
+            GetProcAddress(avrtModule, "AvSetMmThreadPriority"));
+        revertCharacteristics = reinterpret_cast<AvRevertMmThreadCharacteristicsFn>(
+            GetProcAddress(avrtModule, "AvRevertMmThreadCharacteristics"));
+
+        if (!setCharacteristics || !setPriority || !revertCharacteristics) {
+            logInfo("[LaserControllerStreaming] avrt.dll MMCSS entry point lookup failed");
+            FreeLibrary(avrtModule);
+            avrtModule = nullptr;
+            return;
+        }
+
+        DWORD taskIndex = 0;
+        mmcssHandle = setCharacteristics(L"Pro Audio", &taskIndex);
+        if (!mmcssHandle) {
+            logInfo("[LaserControllerStreaming] AvSetMmThreadCharacteristicsW failed",
+                    static_cast<int>(GetLastError()));
+            return;
+        }
+
+        constexpr int avrtPriorityCritical = 2;
+        if (!setPriority(mmcssHandle, avrtPriorityCritical)) {
+            logInfo("[LaserControllerStreaming] AvSetMmThreadPriority failed",
+                    static_cast<int>(GetLastError()));
+        }
+    }
+
+    ~WindowsMmcssThreadRegistration() {
+        if (mmcssHandle && revertCharacteristics) {
+            if (!revertCharacteristics(mmcssHandle)) {
+                logInfo("[LaserControllerStreaming] AvRevertMmThreadCharacteristics failed",
+                        static_cast<int>(GetLastError()));
+            }
+        }
+        if (avrtModule) {
+            FreeLibrary(avrtModule);
+        }
+    }
+
+    WindowsMmcssThreadRegistration(const WindowsMmcssThreadRegistration&) = delete;
+    WindowsMmcssThreadRegistration& operator=(const WindowsMmcssThreadRegistration&) = delete;
+
+private:
+    using AvSetMmThreadCharacteristicsWFn = HANDLE (WINAPI *)(LPCWSTR, LPDWORD);
+    using AvSetMmThreadPriorityFn = BOOL (WINAPI *)(HANDLE, int);
+    using AvRevertMmThreadCharacteristicsFn = BOOL (WINAPI *)(HANDLE);
+
+    HMODULE avrtModule = nullptr;
+    HANDLE mmcssHandle = nullptr;
+    AvSetMmThreadPriorityFn setPriority = nullptr;
+    AvRevertMmThreadCharacteristicsFn revertCharacteristics = nullptr;
+    AvSetMmThreadCharacteristicsWFn setCharacteristics = nullptr;
+};
+#endif
+
 void elevateWorkerThreadPriority() {
 #if defined(__APPLE__)
-    // macOS: use QoS to request a higher scheduling class without root.
-    const int rc = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    // macOS: keep streaming responsive without competing with UI/input/render
+    // work at the top interactive QoS class.
+    const int rc = pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
     if (rc != 0) {
         logInfo("[LaserControllerStreaming] pthread_set_qos_class_self_np failed", rc);
     }
@@ -48,6 +122,20 @@ void elevateWorkerThreadPriority() {
     }
 #endif
 }
+
+class WorkerThreadPriorityScope {
+public:
+    WorkerThreadPriorityScope() {
+#if !defined(_WIN32)
+        elevateWorkerThreadPriority();
+#endif
+    }
+
+private:
+#if defined(_WIN32)
+    WindowsMmcssThreadRegistration mmcssRegistration;
+#endif
+};
 
 double percentileFromSortedSamples(const std::vector<double>& sorted, double percentile) {
     if (sorted.empty()) {
@@ -141,11 +229,7 @@ bool LaserControllerStreaming::requestPoints(const PointFillRequest &request) {
     return true;
 }
 
-void LaserControllerStreaming::postProcessOutputPoints(std::vector<LaserPoint>& points) {
-    // Apply startup blanking (first N points forced to black).
-    // X/Y pass through so galvos can travel to content position while dark.
-    // The delay line was cleared in resetStartupBlank() so it fills with
-    // blank-RGB points, providing additional natural blanking during transition.
+void LaserControllerStreaming::applyStartupBlankToOutputPoints(std::vector<LaserPoint>& points) {
     int blankPointsRemaining = startupBlankPointsRemaining.load(std::memory_order_relaxed);
     if (blankPointsRemaining > 0) {
         for (auto &point : points) {
@@ -159,6 +243,14 @@ void LaserControllerStreaming::postProcessOutputPoints(std::vector<LaserPoint>& 
         }
         startupBlankPointsRemaining.store(blankPointsRemaining, std::memory_order_relaxed);
     }
+}
+
+void LaserControllerStreaming::postProcessOutputPoints(std::vector<LaserPoint>& points) {
+    // Apply startup blanking (first N points forced to black).
+    // X/Y pass through so galvos can travel to content position while dark.
+    // The delay line was cleared in resetStartupBlank() so it fills with
+    // blank-RGB points, providing additional natural blanking during transition.
+    applyStartupBlankToOutputPoints(points);
 
     if(!armed.load(std::memory_order_relaxed)) {
         // Shutdown blanking: hold at last content position (dark) long enough
@@ -187,13 +279,21 @@ void LaserControllerStreaming::postProcessOutputPoints(std::vector<LaserPoint>& 
         }
     } 
 
-    // applies scanner sync
+    if (scannerSyncPostProcessSuppressed.load(std::memory_order_relaxed) ||
+        !scannerSyncEnabled.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
+        scannerSyncColourDelayLine.clear();
+        return;
+    }
+
+    // Applies scanner sync.
     const double syncTenThousandths =
         std::max(scannerSyncTime.load(std::memory_order_relaxed), 0.0);
     
     const auto shiftPointCount =
         static_cast<std::size_t>(millisToPoints(syncTenThousandths * 0.1));
 
+    std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
     scannerSyncColourDelayLine.resize(shiftPointCount); 
 
     if(shiftPointCount>0) { 
@@ -248,7 +348,7 @@ void LaserControllerStreaming::startThread() {
     running = true;
     worker = std::thread([this] {
         try {
-            elevateWorkerThreadPriority();
+            WorkerThreadPriorityScope workerThreadPriorityScope;
             this->run();
         } catch (const std::exception& e) {
             logError("[LaserControllerStreaming] uncaught exception in worker thread", e.what());
@@ -487,6 +587,7 @@ void LaserControllerStreaming::clearErrors() {
     lastErrorTick.store(0, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(errorCountsMutex);
     errorCounts.clear();
+    lastLoggedEventTicks.clear();
     lastWarningCode.clear();
     lastErrorCode.clear();
 }
@@ -630,7 +731,10 @@ void LaserControllerStreaming::recordRecentEvent(ControllerEventSeverity severit
     }
 
     const std::string code(errorType);
+    const auto now = std::chrono::steady_clock::now();
+    const SteadyRep nowTick = now.time_since_epoch().count();
     std::uint64_t count = 0;
+    bool shouldLog = false;
     {
         std::lock_guard<std::mutex> lock(errorCountsMutex);
         count = ++errorCounts[code];
@@ -639,13 +743,27 @@ void LaserControllerStreaming::recordRecentEvent(ControllerEventSeverity severit
         } else {
             lastWarningCode = code;
         }
+
+        const auto [it, inserted] = lastLoggedEventTicks.try_emplace(code, SteadyRep{0});
+        const auto lastLogTime = std::chrono::steady_clock::time_point{
+            std::chrono::steady_clock::duration{it->second}};
+        const bool logIntervalElapsed =
+            it->second == 0 ||
+            (now - lastLogTime) >= std::chrono::milliseconds{repeatedEventLogIntervalMillis};
+        shouldLog = inserted || count == 1 || logIntervalElapsed;
+        if (shouldLog) {
+            it->second = nowTick;
+        }
     }
 
-    const SteadyRep nowTick = std::chrono::steady_clock::now().time_since_epoch().count();
     if (severity == ControllerEventSeverity::Error) {
         lastErrorTick.store(nowTick, std::memory_order_relaxed);
     } else {
         lastWarningTick.store(nowTick, std::memory_order_relaxed);
+    }
+
+    if (!shouldLog) {
+        return;
     }
 
     const char* severityLabel = controllerEventSeverityLabel(severity);
@@ -696,6 +814,7 @@ ControllerEventSeverity LaserControllerStreaming::recentEventSeverityNow(
 void LaserControllerStreaming::resetStartupBlank() {
     const int blankPoints = millisToPoints(1.0f);
     startupBlankPointsRemaining.store(blankPoints, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
     scannerSyncColourDelayLine.clear();
 }
 
@@ -704,10 +823,13 @@ void LaserControllerStreaming::resetShutdownBlank() {
     // sync colour delay line plus 1 ms dwell, so no stale colours leak through
     // as galvos travel back to centre.
     const double syncTenThousandths =
-        std::max(scannerSyncTime.load(std::memory_order_relaxed), 0.0);
+        scannerSyncEnabled.load(std::memory_order_relaxed)
+            ? std::max(scannerSyncTime.load(std::memory_order_relaxed), 0.0)
+            : 0.0;
     const int syncPoints = static_cast<int>(millisToPoints(syncTenThousandths * 0.1));
     const int dwellPoints = millisToPoints(1.0);
     shutdownBlankPointsRemaining.store(syncPoints + dwellPoints, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
     scannerSyncColourDelayLine.clear();
 }
 
@@ -726,6 +848,31 @@ void LaserControllerStreaming::setScannerSync(double offsetTenThousandths) {
 
 double LaserControllerStreaming::getScannerSync() const noexcept {
     return scannerSyncTime.load(std::memory_order_relaxed);
+}
+
+void LaserControllerStreaming::setScannerSyncEnabled(bool enabled) {
+    const bool wasEnabled = scannerSyncEnabled.exchange(enabled, std::memory_order_relaxed);
+    if (wasEnabled != enabled) {
+        std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
+        scannerSyncColourDelayLine.clear();
+    }
+}
+
+bool LaserControllerStreaming::isScannerSyncEnabled() const noexcept {
+    return scannerSyncEnabled.load(std::memory_order_relaxed);
+}
+
+void LaserControllerStreaming::setScannerSyncPostProcessSuppressed(bool suppressed) {
+    const bool wasSuppressed =
+        scannerSyncPostProcessSuppressed.exchange(suppressed, std::memory_order_relaxed);
+    if (wasSuppressed != suppressed) {
+        std::lock_guard<std::mutex> delayLineLock(scannerSyncColourDelayLineMutex);
+        scannerSyncColourDelayLine.clear();
+    }
+}
+
+bool LaserControllerStreaming::isScannerSyncPostProcessSuppressed() const noexcept {
+    return scannerSyncPostProcessSuppressed.load(std::memory_order_relaxed);
 }
 
 } // namespace libera::core

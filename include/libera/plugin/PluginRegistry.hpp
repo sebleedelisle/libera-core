@@ -79,6 +79,13 @@ PluginInstallResult validatePluginFile(const std::string& sourcePath);
 PluginInstallResult installPluginFile(const std::string& sourcePath,
                                       const std::string& destDir);
 
+/*
+ * Remove a plugin file from disk.
+ *
+ * This does not unload native code or erase the registry entry. A loaded
+ * plugin stays active until process restart, which lets management UIs report
+ * the removed-but-still-loaded state accurately.
+ */
 bool removePluginFile(const std::string& path, std::string* error = nullptr);
 
 } // namespace libera::plugin

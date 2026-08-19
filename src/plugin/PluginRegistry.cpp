@@ -1,6 +1,8 @@
 #include "libera/plugin/PluginRegistry.hpp"
 #include "libera/plugin/libera_plugin.h"
 
+#include "PluginValidation.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <system_error>
@@ -62,11 +64,6 @@ std::string libraryErrorRaw() {
     const char* msg = dlerror();
     return msg ? msg : "unknown error";
 #endif
-}
-
-bool isSharedLibraryExt(const fs::path& path) {
-    const auto ext = path.extension().string();
-    return ext == ".dylib" || ext == ".so" || ext == ".dll";
 }
 
 } // namespace
@@ -161,7 +158,7 @@ PluginInstallResult validatePluginFile(const std::string& sourcePath) {
         result.message = "Not a regular file";
         return result;
     }
-    if (!isSharedLibraryExt(sourcePath)) {
+    if (!isSharedLibraryPath(sourcePath)) {
         result.message = "File is not a shared library (.dylib/.so/.dll)";
         return result;
     }
@@ -183,24 +180,14 @@ PluginInstallResult validatePluginFile(const std::string& sourcePath) {
     auto getApi = reinterpret_cast<GetApiFn>(getApiSym);
     const libera_plugin_api_t* api = getApi();
 
-    if (!api) {
+    const std::string validationError = validatePluginApi(api);
+    if (!validationError.empty()) {
         closeLibraryRaw(handle);
-        result.message = "Plugin returned a null API table";
-        return result;
-    }
-    if (api->abi_version != LIBERA_PLUGIN_API_VERSION) {
-        result.message = "ABI version mismatch (plugin=" +
-                         std::to_string(api->abi_version) +
-                         ", host=" + std::to_string(LIBERA_PLUGIN_API_VERSION) + ")";
-        closeLibraryRaw(handle);
+        result.message = validationError;
         return result;
     }
 
-    if (api->display_name && *api->display_name) {
-        result.message = std::string("OK: ") + api->display_name;
-    } else {
-        result.message = "OK";
-    }
+    result.message = std::string("OK: ") + api->display_name;
 
     closeLibraryRaw(handle);
     result.success = true;
@@ -245,7 +232,6 @@ bool removePluginFile(const std::string& path, std::string* error) {
         return false;
     }
 
-    PluginRegistry::instance().forget(path);
     return true;
 }
 

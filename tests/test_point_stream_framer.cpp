@@ -106,6 +106,71 @@ static void addLitCircle(std::vector<LaserPoint>& frame,
     }
 }
 
+static std::vector<LaserPoint> makeLiberationStyleFrame(float previousHomeX,
+                                                        float previousHomeY,
+                                                        float frameHomeX,
+                                                        float frameHomeY,
+                                                        float drawDx,
+                                                        float r,
+                                                        float g,
+                                                        float b) {
+    std::vector<LaserPoint> frame;
+    addBlankMove(frame, previousHomeX, previousHomeY, frameHomeX, frameHomeY, 36);
+    for (std::size_t i = 0; i < 4; ++i) {
+        frame.push_back(makeBlankPoint(frameHomeX, frameHomeY));
+    }
+
+    const float midX = frameHomeX + drawDx;
+    const float midY = frameHomeY;
+    const float endX = midX;
+    const float endY = frameHomeY + 0.22f;
+    addLitEdge(frame, frameHomeX, frameHomeY, midX, midY, 70, r, g, b);
+    addLitEdge(frame, midX, midY, endX, endY, 70, r, g, b);
+
+    addBlankMove(frame, endX, endY, frameHomeX, frameHomeY, 30);
+    for (std::size_t i = 0; i < 12; ++i) {
+        frame.push_back(makeBlankPoint(frameHomeX, frameHomeY));
+    }
+    return frame;
+}
+
+static std::vector<LaserPoint> makeLiberationStyleMultiShapeFrame(float previousHomeX,
+                                                                  float previousHomeY,
+                                                                  float frameHomeX,
+                                                                  float frameHomeY,
+                                                                  float secondShapeX,
+                                                                  float secondShapeY,
+                                                                  float r,
+                                                                  float g,
+                                                                  float b) {
+    std::vector<LaserPoint> frame;
+    addBlankMove(frame, previousHomeX, previousHomeY, frameHomeX, frameHomeY, 36);
+    for (std::size_t i = 0; i < 4; ++i) {
+        frame.push_back(makeBlankPoint(frameHomeX, frameHomeY));
+    }
+
+    // Shape 1 is closed at frameHome. A naive "home then depart" detector can
+    // confuse the following blank move to shape 2 with a frame boundary.
+    addLitEdge(frame, frameHomeX, frameHomeY, frameHomeX + 0.24f, frameHomeY, 55, r, g, b);
+    addLitEdge(frame, frameHomeX + 0.24f, frameHomeY, frameHomeX + 0.12f, frameHomeY + 0.20f, 55, r, g, b);
+    addLitEdge(frame, frameHomeX + 0.12f, frameHomeY + 0.20f, frameHomeX, frameHomeY, 55, r, g, b);
+
+    addBlankMove(frame, frameHomeX, frameHomeY, secondShapeX, secondShapeY, 24);
+
+    // Shape 2 is also closed, then Liberation returns to the frame's first lit
+    // point before the next frame begins elsewhere.
+    addLitEdge(frame, secondShapeX, secondShapeY, secondShapeX + 0.22f, secondShapeY, 55, r, g, b);
+    addLitEdge(frame, secondShapeX + 0.22f, secondShapeY, secondShapeX + 0.22f, secondShapeY + 0.22f, 55, r, g, b);
+    addLitEdge(frame, secondShapeX + 0.22f, secondShapeY + 0.22f, secondShapeX, secondShapeY + 0.22f, 55, r, g, b);
+    addLitEdge(frame, secondShapeX, secondShapeY + 0.22f, secondShapeX, secondShapeY, 55, r, g, b);
+
+    addBlankMove(frame, secondShapeX, secondShapeY, frameHomeX, frameHomeY, 30);
+    for (std::size_t i = 0; i < 12; ++i) {
+        frame.push_back(makeBlankPoint(frameHomeX, frameHomeY));
+    }
+    return frame;
+}
+
 // Build a repeating point stream from a single frame pattern.
 // The callback cycles through the pattern endlessly.
 struct RepeatingStreamSource {
@@ -448,7 +513,112 @@ void testNominalSizeFrameDetection() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: Buffer stability check
+// Test 6: Liberation-style frames with moving start points
+//
+// Liberation/ofxLaser frames can begin with a blank move from the previous
+// frame's home position to the current frame's first lit point. The frame then
+// returns to the current home before the next frame moves away to a different
+// start. The framer should split at the start of that outgoing blank travel,
+// not after the next frame's leading move.
+// ---------------------------------------------------------------------------
+void testLiberationMovingStartFrameDetection() {
+    logInfo("--- Test: Liberation moving-start frame detection ---");
+
+    const float ax = -0.55f;
+    const float ay = -0.35f;
+    const float bx = 0.55f;
+    const float by = 0.35f;
+
+    std::vector<LaserPoint> frameA =
+        makeLiberationStyleFrame(bx, by, ax, ay, 0.28f, 1.0f, 0.0f, 0.0f);
+    std::vector<LaserPoint> frameB =
+        makeLiberationStyleFrame(ax, ay, bx, by, -0.28f, 0.0f, 0.0f, 1.0f);
+
+    ASSERT_EQ(frameA.size(), frameB.size(),
+              "test frames should have identical sizes");
+
+    std::vector<LaserPoint> pattern;
+    pattern.reserve(frameA.size() + frameB.size());
+    pattern.insert(pattern.end(), frameA.begin(), frameA.end());
+    pattern.insert(pattern.end(), frameB.begin(), frameB.end());
+
+    logInfo("  Frame size:", frameA.size(), "points");
+
+    FramerTestController controller;
+    LaserController::setTargetLatency(std::chrono::milliseconds(0));
+    controller.setPointRate(30000);
+    controller.setArmed(true);
+
+    RepeatingStreamSource source;
+    source.pattern = pattern;
+    controller.setPointCallback(source.callback());
+
+    auto sizes = extractFrames(controller, 4095, 300, 36);
+
+    logInfo("  Extracted", sizes.size(), "frames");
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+        logInfo("    frame", i, ":", sizes[i], "points");
+    }
+
+    LOG_CHECK(!sizes.empty(), "extracted at least one frame");
+    LOG_CHECK(mostFramesMatchPatternSize(sizes, frameA.size(), 4),
+              "most frames split before the outgoing blank move to the next start");
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: Liberation moving-start frame with multiple shapes
+//
+// The renderer returns to the frame home only once per frame, but individual
+// closed shapes can also end at the frame home before blanking to another
+// shape. The framer must not treat that internal shape transition as the start
+// of the next frame.
+// ---------------------------------------------------------------------------
+void testLiberationMovingStartMultiShapeFrameDetection() {
+    logInfo("--- Test: Liberation moving-start multi-shape frame detection ---");
+
+    const float ax = -0.55f;
+    const float ay = -0.35f;
+    const float bx = 0.55f;
+    const float by = 0.35f;
+
+    std::vector<LaserPoint> frameA =
+        makeLiberationStyleMultiShapeFrame(bx, by, ax, ay, -0.20f, 0.25f, 1.0f, 0.0f, 0.0f);
+    std::vector<LaserPoint> frameB =
+        makeLiberationStyleMultiShapeFrame(ax, ay, bx, by, 0.20f, -0.25f, 0.0f, 0.0f, 1.0f);
+
+    ASSERT_EQ(frameA.size(), frameB.size(),
+              "test frames should have identical sizes");
+
+    std::vector<LaserPoint> pattern;
+    pattern.reserve(frameA.size() + frameB.size());
+    pattern.insert(pattern.end(), frameA.begin(), frameA.end());
+    pattern.insert(pattern.end(), frameB.begin(), frameB.end());
+
+    logInfo("  Frame size:", frameA.size(), "points");
+
+    FramerTestController controller;
+    LaserController::setTargetLatency(std::chrono::milliseconds(0));
+    controller.setPointRate(30000);
+    controller.setArmed(true);
+
+    RepeatingStreamSource source;
+    source.pattern = pattern;
+    controller.setPointCallback(source.callback());
+
+    auto sizes = extractFrames(controller, 4095, 300, 36);
+
+    logInfo("  Extracted", sizes.size(), "frames");
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+        logInfo("    frame", i, ":", sizes[i], "points");
+    }
+
+    LOG_CHECK(!sizes.empty(), "extracted at least one frame");
+    LOG_CHECK(mostFramesMatchPatternSize(sizes, frameA.size(), 6),
+              "most frames keep all shapes in one Liberation source frame");
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Buffer stability check
 //
 // Run many frame extractions and verify the reported buffer state doesn't
 // grow unboundedly.
@@ -511,7 +681,7 @@ void testBufferDoesNotGrowUnbounded() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Keep one prepared frame in reserve
+// Test 9: Keep one prepared frame in reserve
 //
 // The framer should not wait until the next transport-ready poll to start
 // building the following frame. After serving one frame it should keep another
@@ -569,6 +739,10 @@ int main() {
     testComplexMultiShapeFrameDetection();
     logInfo("");
     testNominalSizeFrameDetection();
+    logInfo("");
+    testLiberationMovingStartFrameDetection();
+    logInfo("");
+    testLiberationMovingStartMultiShapeFrameDetection();
     logInfo("");
     testBufferDoesNotGrowUnbounded();
     logInfo("");

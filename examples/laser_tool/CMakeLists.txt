@@ -51,6 +51,11 @@ if (NOT TARGET imgui_lib)
     endif()
 endif()
 
+if (NOT TARGET libera-plugin-ui-imgui)
+    include("${CMAKE_SOURCE_DIR}/cmake/LiberaImguiWidgets.cmake")
+    libera_add_imgui_plugin_ui(libera-plugin-ui-imgui imgui_lib)
+endif()
+
 # ---- Laser Tool executable ----
 add_executable(laser-tool
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
@@ -65,6 +70,6 @@ foreach(PATTERN_FILE ${ILDA_PATTERNS})
         ${CMAKE_CURRENT_BINARY_DIR}/patterns/${PATTERN_NAME} COPYONLY)
 endforeach()
 target_include_directories(laser-tool PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(laser-tool PRIVATE libera-core imgui_lib)
+target_link_libraries(laser-tool PRIVATE libera-core imgui_lib libera-plugin-ui-imgui)
 libera_apply_warnings(laser-tool)
 libera_apply_sanitizers(laser-tool)

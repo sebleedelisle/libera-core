@@ -39,6 +39,10 @@ struct PointFillRequest {
     /// Absolute running counter for emitted points.
     std::uint64_t currentPointIndex = 0;
 
+    /// Internal source-pull requests may return fewer real points instead of
+    /// padding with transport fallback blanks.
+    bool allowShortRead = false;
+
     [[nodiscard]] bool needsPoints(std::size_t minPoints) const {
         return (minimumPointsRequired > minPoints) || (maximumPointsRequired > minPoints);
     }
@@ -209,6 +213,8 @@ public:
     // Offset expressed in 1/10,000th of a second (0.1 ms) units.
     void setScannerSync(double offsetTenThousandths); 
     double getScannerSync() const noexcept; 
+    void setScannerSyncEnabled(bool enabled);
+    bool isScannerSyncEnabled() const noexcept;
     void setVerbose(bool enabled);
     bool isVerbose() const noexcept;
 
@@ -233,6 +239,11 @@ protected:
 
     /// Reset the startup blanking window to 1 ms worth of points.
     void resetStartupBlank();
+
+    /// Consume the current startup blanking window against an already generated
+    /// point batch. Useful when a transport detects a playback discontinuity
+    /// after requestPoints() has already run.
+    void applyStartupBlankToOutputPoints(std::vector<LaserPoint>& points);
 
     /// Reset the shutdown blanking window (blank-in-place before returning to centre).
     void resetShutdownBlank();
@@ -286,6 +297,12 @@ protected:
     /// identical whether the points came from the user callback or from an
     /// internal frame scheduler.
     void postProcessOutputPoints(std::vector<LaserPoint>& points);
+
+    /// Temporarily skip colour-delay scanner sync in postProcessOutputPoints().
+    /// Used by transports that send scanner-sync timing as protocol metadata
+    /// for the receiver to apply at the hardware edge.
+    void setScannerSyncPostProcessSuppressed(bool suppressed);
+    bool isScannerSyncPostProcessSuppressed() const noexcept;
 
     /// Metrics from the most recent requestPoints() call on this controller.
     const PointRequestMetrics& lastPointRequestMetrics() const noexcept;
@@ -348,6 +365,11 @@ protected:
     PointRequestMetrics pointRequestMetrics{};
     // Stores 1/10,000th of a second units so we match legacy colour-shift semantics.
     std::atomic<double> scannerSyncTime{2.0}; // in 1/10,000 of a second
+    std::atomic<bool> scannerSyncEnabled{true};
+    std::atomic<bool> scannerSyncPostProcessSuppressed{false};
+    // Arm/disarm can reset this delay line from the app thread while transport
+    // workers are applying scanner sync, so every deque mutation is serialized.
+    mutable std::mutex scannerSyncColourDelayLineMutex;
     std::deque<LaserPoint> scannerSyncColourDelayLine;
     std::atomic<int> startupBlankPointsRemaining{0};
     std::atomic<int> shutdownBlankPointsRemaining{0};
@@ -359,6 +381,7 @@ private:
 
     static constexpr std::size_t latencySampleWindow = 512;
     static constexpr std::int64_t defaultRecentEventHoldMillis = 4000;
+    static constexpr std::int64_t repeatedEventLogIntervalMillis = 1000;
     mutable std::mutex latencySamplesMutex;
     std::deque<double> latencySamplesMs;
     mutable std::uint64_t latencyMutationCount{0};
@@ -380,6 +403,7 @@ private:
     std::atomic<std::int64_t> recentEventHoldMillis{defaultRecentEventHoldMillis};
     mutable std::mutex errorCountsMutex;
     std::unordered_map<std::string, std::uint64_t> errorCounts;
+    std::unordered_map<std::string, SteadyRep> lastLoggedEventTicks;
     std::string lastWarningCode;
     std::string lastErrorCode;
 };

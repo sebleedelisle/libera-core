@@ -18,7 +18,9 @@ inline constexpr std::string_view bufferOverrun = "network.buffer_overrun";
 
 namespace etherdream {
 inline constexpr std::string_view playbackIdle = "etherdream.playback_idle";
+inline constexpr std::string_view streamStarvation = "etherdream.stream_starvation";
 inline constexpr std::string_view stopCondition = "etherdream.stop_condition";
+inline constexpr std::string_view rebootRequired = "etherdream.reboot_required";
 } // namespace etherdream
 
 namespace usb {
@@ -48,11 +50,13 @@ inline constexpr std::string_view labelFor(std::string_view code) {
     if (code == network::timeout) return "Network timeout";
     if (code == network::protocolError) return "Network protocol error";
     if (code == network::packetLoss) return "Network packet loss";
-    if (code == network::bufferUnderflow) return "Network buffer underflow";
+    if (code == network::bufferUnderflow) return "Network underrun";
     if (code == network::bufferOverrun) return "Network buffer overrun";
 
-    if (code == etherdream::playbackIdle) return "Ether Dream playback idle";
+    if (code == etherdream::playbackIdle) return "Ether Dream underrun / playback idle";
+    if (code == etherdream::streamStarvation) return "Computer performance underrun";
     if (code == etherdream::stopCondition) return "Ether Dream stop condition";
+    if (code == etherdream::rebootRequired) return "Ether Dream playback stuck - reboot DAC";
 
     if (code == usb::connectFailed) return "USB connect failed";
     if (code == usb::connectionLost) return "USB connection lost";
