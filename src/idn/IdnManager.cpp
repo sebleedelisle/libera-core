@@ -82,6 +82,11 @@ std::string makeDisplayServiceLabel(const IDNSL_SERVER_INFO& serverInfo,
     return fallbackLabel;
 }
 
+IdnController::HealthEndpoint makeHealthEndpoint(
+    const core::ControllerInfo::NetworkInfo& networkInfo) {
+    return IdnController::HealthEndpoint{networkInfo.ip, networkInfo.port};
+}
+
 std::string ipv4ToString(const in_addr& addr) {
     const std::uint32_t hostOrder = ntohl(addr.s_addr);
     return std::to_string((hostOrder >> 24) & 0xFFu) + "." +
@@ -381,6 +386,12 @@ std::vector<std::unique_ptr<core::ControllerInfo>> IdnManager::discover() {
             if (activeIt->second->controllerIndex() != index) {
                 activeIt->second->updateControllerIndex(index);
             }
+            if (networkInfo) {
+                activeIt->second->setHealthEndpoint(makeHealthEndpoint(*networkInfo));
+            }
+            if (matchedService) {
+                activeIt->second->noteDiscoverySeen();
+            }
         }
 
         if (!networkInfo && sdkLabel.rfind(idnIpPrefix, 0) == 0 && sdkLabel.size() > 5) {
@@ -444,13 +455,21 @@ IdnManager::controllerKey(const IdnControllerInfo& info) const {
 
 std::shared_ptr<IdnController>
 IdnManager::createController(const IdnControllerInfo& info) {
-    return std::make_shared<IdnController>(sdk, info.index());
+    IdnController::HealthEndpoint endpoint;
+    if (const auto& networkInfo = info.networkInfo()) {
+        endpoint = makeHealthEndpoint(*networkInfo);
+    }
+    return std::make_shared<IdnController>(sdk, info.index(), std::move(endpoint));
 }
 
 IdnManager::NewControllerDisposition
 IdnManager::prepareNewController(IdnController& controller,
                                  const IdnControllerInfo& info) {
-    (void)info;
+    if (const auto& networkInfo = info.networkInfo()) {
+        controller.setHealthEndpoint(makeHealthEndpoint(*networkInfo));
+        controller.noteDiscoverySeen();
+    }
+    controller.startHealthMonitoring();
     // Keep existing behavior: calling connectController can re-start a controller.
     controller.startThread();
     return NewControllerDisposition::KeepController;
@@ -458,13 +477,18 @@ IdnManager::prepareNewController(IdnController& controller,
 
 void IdnManager::prepareExistingController(IdnController& controller,
                                            const IdnControllerInfo& info) {
-    (void)info;
+    if (const auto& networkInfo = info.networkInfo()) {
+        controller.setHealthEndpoint(makeHealthEndpoint(*networkInfo));
+        controller.noteDiscoverySeen();
+    }
+    controller.startHealthMonitoring();
     controller.startThread();
 }
 
 void IdnManager::closeController(const std::string& key,
                                  IdnController& controller) {
     (void)key;
+    controller.stopHealthMonitoring();
     controller.close();
 }
 
